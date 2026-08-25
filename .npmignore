@@ -1,0 +1,5 @@
+# npm pack 排除项（覆盖 .gitignore 的 dist/ 回退规则）。
+# 注意：必须存在本文件，否则 npm 会回退用 .gitignore（其中 dist/ 会被排除，
+# 导致发布包缺失全部构建产物）。files 白名单里已有 dist/scripts 等，这里只补排除。
+node_modules/
+*.tsbuildinfo

@@ -1,0 +1,44 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.vitest/
+coverage/
+work/*
+!work/sync-plugin-dist.ps1
+projects/
+config.yaml
+.pnpm-store/
+# 正式版发布缓存目录（publish-stable.ps1 复用其 .git 累积版本历史）
+/publish/
+
+# 过程/纪律记录（本地保留，不提交）
+/doublecheck-*.md
+/docs/doublecheck-*.md
+/docs/ab-*.md
+/docs/changr-*.md
+/docs/CLIENT-PANEL-*.md
+/docs/DESIGN-*.md
+/docs/GAME-LANGUAGE-SWITCH-RESEARCH.md
+/docs/HANDOFF.md
+/docs/ISSUE-*.md
+/docs/PARALLEL-PLAN.md
+/docs/PHASE0.md
+/docs/SPEC-*.md
+/docs/TASK-*.md
+/docs/TRANSLATION-MODE-UX.md
+
+# 产物 / 编辑器 / 临时文件
+icon-*.png
+!icon-tav-96x96.png
+*.xlsx
+*.tsbuildinfo
+.vscode/
+*.code-workspace
+.idea/
+Thumbs.db
+desktop.ini
+*.tmp
+*.bak
+*.orig
+*.swp

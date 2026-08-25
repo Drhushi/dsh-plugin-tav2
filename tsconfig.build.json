@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src"],
+  "exclude": ["tests"]
+}

@@ -1,0 +1,48 @@
+# tav2 引擎配置示例（TS 后端）
+# 复制为 <projectDir>/config.yaml 后按项目修改。TS 后端只需 engine / game_dir / lang
+# 及策略字段；llm.api_key 一律留空，翻译统一走 DSH ctx.llm（llmProvider）。
+
+engine: renpy              # 仅支持 renpy（Unity/Yarn/小说已随多引擎支持移除）
+game_dir: C:/path/to/Game   # 游戏根目录
+lang: chinese
+
+llm:
+  base_url: https://opencode.ai/zen/go/v1
+  api_key_env: OPENCODE_API_KEY
+  model: deepseek-v4-flash
+  api_key: ""               # 留空，走宿主 ctx.llm
+
+context:
+  max_tokens: 6000
+  scene_max_units: 40
+  batch_size: 8
+
+# ---- 翻译风格（可选，方案 A）----
+# 不设则启动翻译时询问一次（无确认通道自动降级为 faithful，与旧行为一致）。
+translation:
+  style_preset: ""      # faithful（忠实直译）| standard（自然通顺）| literary（文学化）
+  style_prompt: ""      # 自定义风格要求；非空时叠加到预设之上
+  head: ""              # 自定义「翻译头」：整段补充喂给模型的翻译指令（注入 rewrite/polish 系统提示），如
+                        #   head: "译文要短句化、口语化；专有名词首次出现时用「X（原文）」标注。"
+
+fonts:
+  enabled: true
+  default: noto_sans_sc
+  dir: ""
+
+review_dir: projects
+
+# ---- 运行时自检（可选）----
+# 「写文件成功 ≠ 翻译生效」：这里声明本游戏需要的运行时伴侣组件与日志路径，
+# tav2_verify / tav2_status 会做存在性自检并在缺失时提示；组件不进补丁包 manifest。
+runtime:
+  # 运行时日志路径（缺省由适配器给出，如 log.txt）
+  log_paths: []
+  # 需要的运行时前置组件（相对 game_dir 的路径做存在性探测）
+  requirements: []
+  # 例：
+  #   - id: cjk-font
+  #     name: CJK 字体
+  #     paths:
+  #       - game/fonts/NotoSansSC.otf
+  #     doc: 中文字体，缺失时游戏内中文可能显示为方框。

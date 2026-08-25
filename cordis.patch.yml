@@ -1,0 +1,5 @@
+# dsh-plugin-tav2 的 bundle patch：向 Harness 插入插件行。
+# 用户可在自己的 profile 的 cordis.patch.yml 中按 id=tav2 覆写配置。
+- insert:
+    - id: tav2
+      name: dsh-plugin-tav2
