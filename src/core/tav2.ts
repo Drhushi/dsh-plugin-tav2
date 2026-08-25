@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
-import { delimiter as pathDelimiter } from 'node:path'
+import { existsSync } from 'node:fs'
+import { delimiter as pathDelimiter, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobId, JobKindMap, JobOutcome } from '@deepseek-ai/dsh-jobs'
@@ -19,6 +21,8 @@ export interface RunTav2Options {
   /** 覆盖配置里的默认超时 */
   timeoutMs?: number
   signal?: AbortSignal
+  /** 失败时前置到 stderr 的上下文说明（如 prepare 为什么走 Python 路由） */
+  context?: string
 }
 
 export interface StartTav2JobOptions {
@@ -26,6 +30,8 @@ export interface StartTav2JobOptions {
   label: string
   /** tav2 子命令与参数 */
   args: string[]
+  /** 失败时前置到任务输出的上下文说明（如 prepare 为什么走 Python 路由） */
+  context?: string
 }
 
 /** 构造 python -m tav2 的完整参数列表。 */
@@ -147,14 +153,27 @@ export function truncate(text: string, maxChars: number): string {
 }
 
 /**
+ * 插件内置的 tav2 Python 后端目录：<仓库根>/python（dist 下即 <插件安装目录>/python/）。
+ * 从本模块文件位置推导：dist/core/tav2.js → ../../python；src/core/tav2.ts → ../../python。
+ */
+export function bundledPythonRepo(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  return join(here, '..', '..', 'python')
+}
+
+/**
  * tav2 Python 仓库根目录（应含 <module>/ 包与 config.yaml）。
- * 优先级：插件配置 pythonRepo > 环境变量 TAV2_PYTHON_REPO > 空串（维持原 cwd 解析行为）。
+ * 优先级：插件配置 pythonRepo > 环境变量 TAV2_PYTHON_REPO > 插件内置 python/（存在时）。
+ * 内置目录让 `python -m <module>` 开箱可用——用户无需另行寻找/下载任何未发布组件。
  */
 export function resolvePythonRepo(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return config.pythonRepo || env.TAV2_PYTHON_REPO || ''
+  const repo = config.pythonRepo || env.TAV2_PYTHON_REPO || ''
+  if (repo) return repo
+  const bundled = bundledPythonRepo()
+  return existsSync(bundled) ? bundled : ''
 }
 
 /**
@@ -167,9 +186,12 @@ export function buildSpawnEnv(
 ): NodeJS.ProcessEnv {
   const repo = resolvePythonRepo(config, env)
   if (!repo) return env
+  const bundled = bundledPythonRepo()
+  // 显式配置的 repo 前置（优先解析）；内置兜底后置（不遮蔽用户 PYTHONPATH 里已有的包）。
+  const ordered = repo === bundled ? [env.PYTHONPATH, repo] : [repo, env.PYTHONPATH]
   return {
     ...env,
-    PYTHONPATH: [repo, env.PYTHONPATH].filter(Boolean).join(pathDelimiter),
+    PYTHONPATH: ordered.filter(Boolean).join(pathDelimiter),
   }
 }
 
@@ -195,9 +217,17 @@ export function moduleMissingHint(config: Config, stderr: string): string | unde
       ]
   const repo = resolvePythonRepo(config)
   if (repo) {
-    lines.push(
-      `已注入 PYTHONPATH：${repo}。若仍找不到，请确认该路径是 tav2 仓库根目录（应含 ${moduleName}/ 包目录），或在该目录执行 pip install -e . 安装。`,
-    )
+    if (repo === bundledPythonRepo()) {
+      // 内置后端（插件随附 python/）：指向已发布的 PyPI 依赖，无需用户另找仓库
+      lines.push(`已注入 PYTHONPATH：${repo}（插件内置后端）。若仍找不到 ${moduleName}：`)
+      lines.push('  1) 确认本机 Python 已装第三方依赖：pip install PyYAML requests openpyxl；')
+      lines.push(`  2) 确认插件安装目录的 python/${moduleName}/ 包完整（文件缺失可重装插件）。`)
+      lines.push('想用别的后端？插件配置 pythonRepo 或环境变量 TAV2_PYTHON_REPO 可覆盖内置路径。')
+    } else {
+      lines.push(
+        `已注入 PYTHONPATH：${repo}。若仍找不到，请确认该路径是 tav2 仓库根目录（应含 ${moduleName}/ 包目录），或在该目录执行 pip install -e . 安装。`,
+      )
+    }
   } else {
     lines.push('请任选其一解决：')
     lines.push(
@@ -209,6 +239,24 @@ export function moduleMissingHint(config: Config, stderr: string): string | unde
     )
   }
   return lines.join('\n')
+}
+
+/**
+ * 组装失败输出：前置「为什么走这条链路」的上下文（context）→ 原始 stderr → 模块缺失中文诊断。
+ * code=null（如 spawn 失败、python 可执行文件不存在）时不追加模块缺失诊断，避免误判。
+ */
+export function buildFailureText(
+  config: Config,
+  stderr: string,
+  opts: { context?: string; code: number | null } = { code: null },
+): string {
+  let text = stderr
+  if (opts.context) text = text ? `${opts.context}\n${text}` : opts.context
+  if (opts.code !== null) {
+    const hint = moduleMissingHint(config, text)
+    if (hint) text = `${text}\n${hint}`
+  }
+  return text
 }
 
 /** 前台执行 python -m tav2 <子命令>，返回结构化结果。 */
@@ -236,10 +284,7 @@ export function runTav2(options: RunTav2Options): Promise<Tav2RunResult> {
       clearTimeout(timer)
       const ok = code === 0 && !timedOut
       let errText = stderr
-      if (!ok && code !== null) {
-        const hint = moduleMissingHint(config, errText)
-        if (hint) errText = errText ? `${errText}\n${hint}` : hint
-      }
+      if (!ok) errText = buildFailureText(config, errText, { context: options.context, code })
       const parsed = parseTrailingJson(stdout)
       resolve({
         ok,
@@ -319,7 +364,10 @@ export function startTav2Job(
 
       const done = new Promise<JobOutcome>((resolve) => {
         child.on('error', (err) => {
-          output += `\n${String(err?.message ?? err)}`
+          output = buildFailureText(config, String(err?.message ?? err), {
+            context: options.context,
+            code: null,
+          })
           resolve({ status: 'failed', detail: 'spawn failed', output })
         })
         child.on('close', (code) => {
@@ -327,8 +375,7 @@ export function startTav2Job(
             resolve({ status: 'killed', detail: 'cancelled', output })
           } else {
             if (code !== null && code !== 0) {
-              const hint = moduleMissingHint(config, output)
-              if (hint) output += `\n${hint}`
+              output = buildFailureText(config, output, { context: options.context, code })
             }
             resolve({
               status: code === 0 ? 'completed' : 'failed',

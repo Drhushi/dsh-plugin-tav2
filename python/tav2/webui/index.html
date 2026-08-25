@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tav2 翻译 Agent · 对话式工作台</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #1c2128;
+      --panel-3: #21262d;
+      --border: #30363d;
+      --border-soft: #21262d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2f81f7;
+      --accent-soft: rgba(47, 129, 247, .12);
+      --ok: #3fb950;
+      --ok-soft: rgba(63, 185, 80, .12);
+      --warn: #d29922;
+      --warn-soft: rgba(210, 153, 34, .12);
+      --danger: #f85149;
+      --danger-soft: rgba(248, 81, 73, .12);
+      --mono: ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --shadow: 0 1px 3px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.18);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .app { display: flex; flex-direction: column; height: 100vh; }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+      flex: none;
+    }
+    .brand { display: flex; align-items: baseline; gap: 8px; font-size: 17px; font-weight: 700; }
+    .brand .sub { color: var(--muted); font-size: 12px; font-weight: 400; }
+    .brand .logo { color: var(--accent); }
+    .top-right { display: flex; align-items: center; gap: 10px; }
+    .select, .btn {
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 6px 12px; font-size: 13px;
+    }
+    .select:focus, .btn:focus, textarea:focus { outline: 1px solid var(--accent); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+    .dot.running { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.error { background: var(--danger); }
+    .body { display: flex; flex: 1; min-height: 0; }
+
+    .sidebar {
+      width: 264px; flex: none; background: var(--panel);
+      border-right: 1px solid var(--border); overflow-y: auto; padding: 12px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .side-group { background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; }
+    .side-group summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 12px; font-size: 13px; font-weight: 600; user-select: none;
+    }
+    .side-group summary::-webkit-details-marker { display: none; }
+    .side-group summary .caret { color: var(--muted); transition: transform .15s; }
+    .side-group[open] summary .caret { transform: rotate(90deg); }
+    .badge {
+      font-size: 11px; padding: 1px 7px; border-radius: 999px;
+      background: var(--panel-3); color: var(--muted); font-weight: 500;
+    }
+    .badge.warn { background: var(--warn-soft); color: var(--warn); }
+    .badge.ok { background: var(--ok-soft); color: var(--ok); }
+    .side-body { padding: 4px 12px 12px; }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat-cell { background: var(--panel-3); border-radius: var(--radius-sm); padding: 8px 10px; }
+    .stat-num { font-size: 18px; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 11px; color: var(--muted); }
+    .side-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+    .side-item:last-child { border-bottom: none; }
+    .side-item .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .side-empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
+
+    .chat-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .chat-head {
+      flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 22px; border-bottom: 1px solid var(--border-soft);
+      background: rgba(13, 17, 23, .72);
+    }
+    .chat-head h2 { margin: 0; font-size: 14px; }
+    .chat-head-actions { display: flex; gap: 6px; margin-left: auto; }
+    .pill { font-size: 11.5px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .pill.running { color: var(--ok); border-color: rgba(63,185,80,.45); background: var(--ok-soft); }
+    .pill.stopping { color: var(--warn); border-color: rgba(210,153,34,.45); background: var(--warn-soft); }
+    .pill.auto_low { color: var(--accent); border-color: rgba(47,129,247,.45); background: var(--accent-soft); }
+
+    .chat-scroll { flex: 1; overflow-y: auto; padding: 22px; }
+    .chat-col { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+    .msg { display: flex; flex-direction: column; gap: 6px; }
+    .msg .who { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .msg .avatar {
+      width: 18px; height: 18px; border-radius: 6px; font-size: 10px;
+      display: inline-flex; align-items: center; justify-content: center; font-weight: 700;
+    }
+    .avatar.user { background: var(--accent); color: #fff; }
+    .avatar.agent { background: linear-gradient(135deg, #2f81f7, #8957e5); color: #fff; }
+    .bubble.user {
+      align-self: flex-end; max-width: 82%; background: var(--accent); color: #fff;
+      border-radius: 14px 14px 4px 14px; padding: 10px 14px; box-shadow: var(--shadow);
+      white-space: pre-wrap;
+    }
+    .bubble.agent {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow);
+    }
+    .bubble.agent > .txt { white-space: pre-wrap; }
+    .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .tag.read { color: var(--accent); border-color: rgba(47,129,247,.4); }
+    .tag.draft { color: var(--warn); border-color: rgba(210,153,34,.4); }
+    .tag.mutate { color: var(--danger); border-color: rgba(248,81,73,.4); }
+
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+    .card h3 { margin: 0 0 10px; font-size: 13.5px; }
+    .plan { border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; }
+    .plan-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel-2); font-size: 12.5px; font-weight: 600; }
+    .plan-steps { padding: 4px 12px 10px; }
+    .step { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--border-soft); font-size: 13px; }
+    .step:last-child { border-bottom: none; }
+    .step-ic { width: 18px; height: 18px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
+    .step-ic.done { background: var(--ok-soft); color: var(--ok); }
+    .step-ic.todo { background: var(--panel-3); color: var(--muted); }
+    .step-ic.active { background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .step .tool { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-left: auto; }
+    .step.done .txt { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(139,148,158,.4); }
+
+    .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .action {
+      border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+      background: var(--panel-2); overflow: hidden;
+    }
+    .action summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; font-size: 13px;
+    }
+    .action summary::-webkit-details-marker { display: none; }
+    .action .a-ic { width: 18px; height: 18px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; }
+    .a-ic.done, .a-ic.approved { background: var(--ok-soft); color: var(--ok); }
+    .a-ic.pending { background: var(--warn-soft); color: var(--warn); }
+    .a-ic.failed, .a-ic.rejected { background: var(--danger-soft); color: var(--danger); }
+    .action .a-name { font-family: var(--mono); font-weight: 600; }
+    .action .a-meta { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+    .action .a-body { padding: 8px 12px 10px 40px; border-top: 1px solid var(--border-soft); font-size: 12.5px; color: var(--muted); }
+    .action pre { margin: 6px 0 0; padding: 8px 10px; background: #0a0e14; border-radius: var(--radius-sm); color: #c9d1d9; font-family: var(--mono); font-size: 11.5px; overflow-x: auto; white-space: pre-wrap; }
+
+    .approval {
+      border: 1px solid var(--border); border-left: 3px solid var(--warn);
+      border-radius: var(--radius); background: var(--panel); padding: 14px 16px; box-shadow: var(--shadow);
+    }
+    .approval .a-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .approval .a-title { font-weight: 600; font-size: 13.5px; }
+    .approval .a-desc { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+    .approval .kv { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 10px 0; font-size: 12.5px; }
+    .approval .kv b { color: var(--text); font-weight: 600; }
+    .approval .a-actions { display: flex; gap: 8px; }
+    .btn.ok { color: var(--ok); border-color: rgba(63,185,80,.5); background: var(--ok-soft); }
+    .btn.ok:hover { background: rgba(63,185,80,.2); }
+    .btn.danger { color: var(--danger); border-color: rgba(248,81,73,.5); background: var(--danger-soft); }
+    .btn.danger:hover { background: rgba(248,81,73,.2); }
+    .btn.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .btn.primary:hover { background: #3b8cff; }
+
+    .result { border-radius: var(--radius-sm); border: 1px solid var(--border-soft); background: var(--panel-2); }
+    .result summary { list-style: none; cursor: pointer; padding: 8px 12px; font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    .result summary::-webkit-details-marker { display: none; }
+    .result .r-body { padding: 0 12px 10px 12px; }
+    .result pre { margin: 0; padding: 8px 10px; background: #0a0e14; border-radius: var(--radius-sm); color: #c9d1d9; font-family: var(--mono); font-size: 11.5px; overflow-x: auto; white-space: pre-wrap; }
+
+    .composer {
+      flex: none; border-top: 1px solid var(--border); background: var(--panel);
+      padding: 12px 22px 14px;
+    }
+    .composer-inner { max-width: 780px; margin: 0 auto; }
+    .presets { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .chip {
+      background: var(--panel-2); color: var(--muted); border: 1px solid var(--border-soft);
+      border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer;
+    }
+    .chip:hover { color: var(--text); border-color: var(--border); }
+    .input-row { display: flex; align-items: flex-end; gap: 10px; }
+    textarea {
+      flex: 1; resize: none; min-height: 42px; max-height: 160px;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 10px 12px; font-size: 13.5px; font-family: inherit; line-height: 1.5;
+    }
+    textarea::placeholder { color: var(--muted); }
+    .composer-side { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+    .hint { font-size: 11px; color: var(--muted); text-align: center; }
+    .toast {
+      position: fixed; right: 20px; bottom: 20px; padding: 10px 16px; border-radius: 8px;
+      font-size: 13px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    }
+    .toast.ok { background: #123; color: var(--ok); border: 1px solid var(--ok); }
+    .toast.error { background: #231; color: var(--danger); border: 1px solid var(--danger); }
+    .toast.hidden { display: none; }
+    .modal {
+      position: fixed; inset: 0; background: rgba(1,4,9,.65);
+      display: flex; align-items: center; justify-content: center; z-index: 40;
+    }
+    .modal.hidden { display: none; }
+    .modal-box {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 20px 22px; width: min(540px, 92vw); max-height: 86vh; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow);
+    }
+    .modal-box h3 { margin: 0 0 4px; }
+    .modal-box label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+    .modal-box .row2 { display: flex; gap: 10px; }
+    .modal-box .row2 label { flex: 1; }
+    .modal-box label.toggle { flex-direction: row; align-items: center; gap: 8px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+    .setup-hint {
+      flex: none; margin: 12px 22px 0; padding: 10px 14px;
+      border: 1px solid var(--warn); border-left: 3px solid var(--warn);
+      border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); font-size: 13px;
+    }
+    .setup-hint.hidden { display: none; }
+    .setup-hint b { color: var(--text); }
+    select.input { min-width: 180px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="logo">tav2</span><span class="sub">翻译 Agent · 对话式工作台</span></div>
+      <div class="top-right">
+        <select id="project-select" class="select" title="项目"></select>
+        <button id="btn-settings" class="btn" title="配置">⚙ 配置</button>
+        <button id="btn-refresh" class="btn">刷新</button>
+        <span id="status-dot" class="dot" title="服务状态"></span>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside class="sidebar">
+        <details class="side-group" open>
+          <summary><span>项目概览</span><span class="caret">▸</span></summary>
+          <div class="side-body"><div id="side-stats" class="stat-grid"></div></div>
+        </details>
+        <details class="side-group" open>
+          <summary><span>术语</span><span id="side-terms-badge" class="badge">-</span></summary>
+          <div class="side-body"><div id="side-terms-list"></div></div>
+        </details>
+        <details class="side-group" open>
+          <summary><span>世界书</span><span id="side-worldbook-badge" class="badge">-</span></summary>
+          <div class="side-body"><div id="side-worldbook-list"></div></div>
+        </details>
+        <details class="side-group" open>
+          <summary><span>运行历史</span><span class="caret">▸</span></summary>
+          <div class="side-body"><div id="side-runs-list"></div></div>
+        </details>
+      </aside>
+
+      <main class="chat-wrap">
+        <div class="chat-head">
+          <h2>对话</h2>
+          <span id="sess-status-pill" class="pill">○ 空闲</span>
+          <span id="sess-autonomy-pill" class="pill auto_low">auto_low</span>
+          <span id="sess-queue-pill" class="pill">目标队列 0</span>
+          <div class="chat-head-actions">
+            <button id="btn-stop" class="btn" disabled>停止</button>
+            <button id="btn-resume" class="btn" disabled>继续</button>
+          </div>
+        </div>
+        <div id="setup-hint" class="setup-hint hidden"></div>
+
+        <div class="chat-scroll">
+          <div class="chat-col">
+            <div id="chat-messages"></div>
+            <div id="live-panel"></div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="composer-inner">
+            <div id="goal-presets" class="presets">
+              <button class="chip" data-goal="补齐全部未翻译内容，完成后产出审校表">补齐翻译</button>
+              <button class="chip" data-goal="修复术语漏用与一致性，完成后回填并复检">术语一致性</button>
+              <button class="chip" data-goal="对全部候选做译前推敲并锁定高置信项">译前推敲</button>
+            </div>
+            <div class="input-row">
+              <textarea id="chat-input" placeholder="给 Agent 下达目标，例如：翻译前 3 个场景，术语先推敲后锁定……"></textarea>
+              <div class="composer-side">
+                <select id="agent-autonomy" class="select" title="自主级别">
+                  <option value="auto_low">auto_low</option>
+                  <option value="suggest">suggest</option>
+                  <option value="auto_high">auto_high</option>
+                </select>
+                <button id="btn-send" class="btn primary">发送</button>
+              </div>
+            </div>
+            <div class="hint">Enter 发送 · Shift+Enter 换行 · 目标入队后由后台主管 Agent 执行</div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="config-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>配置</h3>
+      <label>游戏/小说目录
+        <select id="cfg-game-dir" class="input"></select>
+        <input id="cfg-game-dir-manual" class="input hidden" placeholder="C:\path\to\game（新项目手动输入，保存后自动记忆）">
+      </label>
+      <div class="row2">
+        <label>引擎
+          <select id="cfg-engine" class="select">
+            <option value="renpy">renpy</option>
+            <option value="novel">novel</option>
+          </select>
+        </label>
+        <label>目标语言目录名
+          <input id="cfg-lang" class="input" placeholder="chinese">
+        </label>
+      </div>
+      <label>API 供应商
+        <select id="cfg-llm-profile" class="select"></select>
+        <div class="hint">切换供应商会自动填入默认 base_url / model / Key 环境变量名；明文 Key 会被清空，请重新填写或留空使用环境变量。</div>
+      </label>
+      <label>LLM base_url
+        <input id="cfg-base-url" class="input" placeholder="https://api.deepseek.com/v1">
+      </label>
+      <div class="row2">
+        <label>model
+          <input id="cfg-model" class="input" placeholder="deepseek-v4-flash">
+        </label>
+        <label>API Key 环境变量名
+          <input id="cfg-key-env" class="input" placeholder="TRANSLATE_AGENT_API_KEY">
+        </label>
+      </div>
+      <label>API Key（明文仅存本机；留空则用环境变量）
+        <input id="cfg-api-key" class="input" type="password" autocomplete="off">
+      </label>
+      <div class="row2">
+        <label>temperature
+          <input id="cfg-temperature" class="input" type="number" step="0.1">
+        </label>
+        <label>max_tokens
+          <input id="cfg-max-tokens" class="input" type="number">
+        </label>
+      </div>
+      <label class="toggle"><input id="cfg-mock" type="checkbox"> 使用 mock（仅测试，不联网，无法跑真 Agent）</label>
+      <div class="modal-actions">
+        <button id="btn-restart-backend" class="btn">重启后台</button>
+        <button id="btn-config-save" class="btn primary">保存</button>
+        <button id="btn-config-cancel" class="btn">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script>
+    "use strict";
+    const LS_PROJECT = "tav2.project";
+    let project = localStorage.getItem(LS_PROJECT) || "";
+    let projectsMeta = {};  // 项目名 -> {name, has_db, game_dir}
+    let currentRunId = "";
+    let lastMsgCount = -1;
+
+    const $ = (id) => document.getElementById(id);
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function apiUrl(path) {
+      if (!project) return path;
+      return path + (path.includes("?") ? "&" : "?") + "project=" + encodeURIComponent(project);
+    }
+
+    async function doFetch(path, options) {
+      const res = await fetch(apiUrl(path), options);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("请求失败 " + res.status));
+      return data;
+    }
+
+    function toast(msg, isError) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.className = "toast " + (isError ? "error" : "ok");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.add("hidden"), 3000);
+    }
+
+    function fmtTime(s) {
+      return s ? String(s).replace("T", " ").slice(5, 16) : "";
+    }
+
+    function statusClass(s) {
+      if (s === "running") return "running";
+      if (s === "done" || s === "approved" || s === "translated") return "done";
+      if (s === "error" || s === "failed" || s === "rejected") return "failed";
+      if (s === "stopping" || s === "stopped") return "pending";
+      if (s === "locked") return "done";
+      if (s === "candidate") return "pending";
+      return "idle";
+    }
+
+    function shortSummary(summary) {
+      if (!summary) return "-";
+      try {
+        const d = JSON.parse(summary);
+        if (d && typeof d === "object") {
+          const n = d.units_translated;
+          return n != null ? ("已译 " + n + " 单元") : d.text || summary;
+        }
+      } catch (e) { /* 旧格式纯文本 */ }
+      return summary.length > 40 ? summary.slice(0, 40) + "…" : summary;
+    }
+
+    function scrollToBottom() {
+      const scroller = document.querySelector(".chat-scroll");
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+
+    // ------------------------------------------------------------------ 项目
+
+    async function loadProjects() {
+      const data = await doFetch("/api/projects");
+      const list = (data.projects || []).filter(p => p.has_db);
+      projectsMeta = {};
+      for (const p of list) projectsMeta[p.name] = p;
+      const sel = $("project-select");
+      sel.innerHTML = "";
+      if (!list.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "（无项目）";
+        sel.appendChild(opt);
+        project = "";
+        return;
+      }
+      if (!list.some(p => p.name === project)) {
+        project = list[0].name;
+        localStorage.setItem(LS_PROJECT, project);
+      }
+      for (const p of list) {
+        const opt = document.createElement("option");
+        opt.value = p.name;
+        opt.textContent = p.name;
+        sel.appendChild(opt);
+      }
+      sel.value = project;
+      resetConversation();
+      await refreshAll();
+    }
+
+    async function syncProjectConfig(notify = true) {
+      // 下拉切换项目后：若记忆里有该项目的游戏目录，自动同步配置，无需手动输入
+      if (!project) return;
+      const meta = projectsMeta[project];
+      if (!meta || !meta.game_dir) {
+        if (notify) toast("该项目未记录游戏目录：打开 ⚙ 配置 选择/输入一次后会自动记忆", true);
+        return;
+      }
+      try {
+        const d = await doFetch("/api/config");
+        if ((d.config || {}).game_dir === meta.game_dir) return;
+        await doFetch("/api/projects/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: project }),
+        });
+        if (notify) toast(`已切换项目「${project}」，游戏目录已自动同步`);
+        refreshSetupHint();
+      } catch (err) {
+        if (notify) toast(err.message, true);
+      }
+    }
+
+    // ------------------------------------------------------------------ 配置
+
+    function fillProfileOptions(selected) {
+      const sel = $("cfg-llm-profile");
+      const profiles = window.__tav2Profiles || {};
+      sel.innerHTML = "";
+      for (const name of Object.keys(profiles)) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name === "deepseek" ? "DeepSeek"
+          : name === "opencode" ? "OpenCode Zen"
+          : name;
+        sel.appendChild(opt);
+      }
+      const custom = document.createElement("option");
+      custom.value = "";
+      custom.textContent = "自定义（手动填写）";
+      sel.appendChild(custom);
+      sel.value = selected;
+      if (![...sel.options].some(o => o.value === selected)) sel.value = "";
+    }
+
+    function onProfileChange() {
+      const name = $("cfg-llm-profile").value;
+      const prof = (window.__tav2Profiles || {})[name];
+      if (!prof) return;
+      if (prof.base_url) $("cfg-base-url").value = prof.base_url;
+      if (prof.model) $("cfg-model").value = prof.model;
+      if (prof.api_key_env) $("cfg-key-env").value = prof.api_key_env;
+      if (prof.temperature != null) $("cfg-temperature").value = prof.temperature;
+      if (prof.max_tokens != null) $("cfg-max-tokens").value = prof.max_tokens;
+      $("cfg-api-key").value = "";
+      toast(`已填入 ${name} 默认配置，请确认 API Key（留空则使用环境变量）`);
+    }
+
+    async function loadConfig() {
+      const d = await doFetch("/api/config");
+      const c = d.config || {};
+      const llm = c.llm || {};
+      window.__tav2Profiles = c.llm_profiles || {};
+      fillProfileOptions(c.llm_profile || "");
+      fillGameDirOptions(c.game_dir || "");
+      $("cfg-engine").value = c.engine || "renpy";
+      $("cfg-lang").value = c.lang || "chinese";
+      $("cfg-base-url").value = llm.base_url || "";
+      $("cfg-model").value = llm.model || "";
+      $("cfg-key-env").value = llm.api_key_env || "";
+      $("cfg-api-key").value = llm.api_key || "";
+      $("cfg-mock").checked = !!llm.mock;
+      $("cfg-temperature").value = llm.temperature != null ? llm.temperature : "";
+      $("cfg-max-tokens").value = llm.max_tokens != null ? llm.max_tokens : "";
+      return c;
+    }
+
+    function fillGameDirOptions(selected) {
+      const sel = $("cfg-game-dir");
+      const manual = $("cfg-game-dir-manual");
+      sel.innerHTML = "";
+      const known = Object.values(projectsMeta).filter(m => m.game_dir);
+      const manualOpt = document.createElement("option");
+      manualOpt.value = "";
+      manualOpt.textContent = known.length
+        ? "（手动输入新路径…）"
+        : "（暂无已记录项目，手动输入新路径）";
+      sel.appendChild(manualOpt);
+      for (const m of known) {
+        const opt = document.createElement("option");
+        opt.value = m.game_dir;
+        opt.textContent = `${m.name} — ${m.game_dir}`;
+        sel.appendChild(opt);
+      }
+      const hit = !!selected && [...sel.options].some(o => o.value === selected);
+      sel.value = hit ? selected : "";
+      manual.value = hit ? "" : selected;
+      updateGameDirManual();
+    }
+
+    function updateGameDirManual() {
+      const sel = $("cfg-game-dir");
+      const manual = $("cfg-game-dir-manual");
+      manual.classList.toggle("hidden", !!sel.value);
+      if (!sel.value) manual.focus();
+    }
+
+    async function openConfigModal() {
+      try {
+        await loadConfig();
+        $("config-modal").classList.remove("hidden");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    function closeConfigModal() {
+      $("config-modal").classList.add("hidden");
+    }
+
+    async function saveConfig() {
+      const body = {
+        game_dir: $("cfg-game-dir").value || $("cfg-game-dir-manual").value,
+        engine: $("cfg-engine").value,
+        lang: $("cfg-lang").value,
+        llm_profile: $("cfg-llm-profile").value,
+        llm: {
+          base_url: $("cfg-base-url").value,
+          model: $("cfg-model").value,
+          api_key_env: $("cfg-key-env").value,
+          api_key: $("cfg-api-key").value,
+          mock: $("cfg-mock").checked,
+        },
+      };
+      const temp = parseFloat($("cfg-temperature").value);
+      if ($("cfg-temperature").value !== "") body.llm.temperature = temp;
+      const tokens = parseInt($("cfg-max-tokens").value, 10);
+      if ($("cfg-max-tokens").value !== "") body.llm.max_tokens = tokens;
+      try {
+        await doFetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        closeConfigModal();
+        toast("配置已保存");
+        await refreshAll();
+        await loadProjects();
+        await refreshSetupHint();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    async function restartBackend() {
+      if (!confirm("确定重启后台服务？\n若有任务正在执行会被中断，重启完成后可在会话里点「继续」恢复队列。")) return;
+      try {
+        await doFetch("/api/restart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        closeConfigModal();
+        toast("正在重启后台…");
+        for (let i = 0; i < 60; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          try {
+            await doFetch("/api/status");
+            toast("后台已重启完成");
+            await refreshAll();
+            await loadProjects();
+            await refreshSetupHint();
+            return;
+          } catch (e) { /* 服务未就绪，继续等待 */ }
+        }
+        toast("后台重启超时，请检查服务进程是否仍在运行", true);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    async function refreshSetupHint() {
+      let c = null;
+      try { c = await doFetch("/api/config"); } catch (e) { /* 服务刚启动 */ }
+      const cfg = c && c.config;
+      const hint = $("setup-hint");
+      if (!cfg || !cfg.game_dir || cfg.llm.mock) {
+        hint.classList.remove("hidden");
+        hint.innerHTML = cfg && cfg.llm.mock
+          ? "当前为 <b>mock 模式</b>（仅供测试，无法真实执行 Agent）。请点击右上角 <b>⚙ 配置</b> 填写 LLM 后保存。"
+          : "尚未配置项目。请点击右上角 <b>⚙ 配置</b>，填写游戏目录与 LLM 后保存。";
+      } else {
+        hint.classList.add("hidden");
+      }
+    }
+
+    function resetConversation() {
+      $("chat-messages").innerHTML = "";
+      $("live-panel").innerHTML = "";
+      lastMsgCount = -1;
+      currentRunId = "";
+    }
+
+    async function refreshAll() {
+      if (!project) return;
+      await Promise.allSettled([loadSession(), loadMessages(), loadLive(), loadSidebar()]);
+    }
+
+    // ------------------------------------------------------------------ 会话
+
+    async function loadSession() {
+      if (!project) return;
+      const s = await doFetch("/api/agent/session");
+      const st = s.status || "idle";
+      const pill = $("sess-status-pill");
+      pill.textContent = st === "running" ? "● 运行中" : st === "stopping" ? "■ 停止中" : "○ 空闲";
+      pill.className = "pill " + (st === "running" ? "running" : st === "stopping" ? "stopping" : "");
+      $("sess-autonomy-pill").textContent = "自主级别 " + ($("agent-autonomy").value || "auto_low");
+      $("sess-queue-pill").textContent = "目标队列 " + (s.queue || []).length
+        + (s.active_goal ? " · " + esc(s.active_goal).slice(0, 30) : "");
+      currentRunId = s.current_run_id || "";
+      $("btn-stop").disabled = st !== "running";
+      $("btn-resume").disabled = st !== "stopping";
+      $("status-dot").className = "dot " + (st === "running" ? "running" : "");
+    }
+
+    // ------------------------------------------------------------------ 消息
+
+    async function loadMessages() {
+      if (!project) return;
+      const d = await doFetch("/api/agent/messages?limit=200");
+      const msgs = d.messages || [];
+      if (msgs.length === lastMsgCount) return;
+      lastMsgCount = msgs.length;
+      $("chat-messages").innerHTML = msgs.map(renderMessage).join("");
+      scrollToBottom();
+    }
+
+    function renderMessage(m) {
+      const role = m.role || "";
+      const time = fmtTime(m.created_at);
+      if (role === "user") {
+        return '<div class="msg"><div class="who"><span class="avatar user">我</span> ' + esc(time)
+          + '</div><div class="bubble user">' + esc(m.content) + "</div></div>";
+      }
+      if (role === "tool") {
+        return '<details class="result"><summary>工具返回'
+          + (m.tool_call_id ? "（" + esc(m.tool_call_id) + "）" : "")
+          + '</summary><div class="r-body"><pre>' + esc(m.content) + "</pre></div></details>";
+      }
+      const calls = m.tool_calls || [];
+      const chips = calls.length
+        ? '<div class="tool-chips">' + calls.map(c =>
+            '<span class="tag">' + esc(c.name) + "</span>"
+          ).join("") + "</div>"
+        : "";
+      return '<div class="msg"><div class="who"><span class="avatar agent">AI</span> Agent · ' + esc(time)
+        + '</div><div class="bubble agent"><div class="txt">' + esc(m.content || "（调用工具中…）")
+        + "</div>" + chips + "</div></div>";
+    }
+
+    // ------------------------------------------------------------------ 实时面板（计划/动作流/审批）
+
+    async function loadLive() {
+      if (!project) return;
+      const s = await doFetch("/api/agent/session");
+      let html = "";
+      const plan = s.plan || [];
+      if (plan.length) {
+        html += '<div class="card"><h3>计划（' + plan.length + " 步）</h3>"
+          + '<div class="plan"><div class="plan-steps">'
+          + plan.map(renderStep).join("")
+          + "</div></div></div>";
+      }
+      if (currentRunId) {
+        const r = await doFetch("/api/run/" + encodeURIComponent(currentRunId));
+        const st = r.stats || {};
+        const us = r.usage || {};
+        const subs = st.sub_batches_total || 0;
+        const pct = subs ? Math.round(((st.sub_batches_done || 0) / subs) * 100) : 0;
+        const mins = Math.round(((us.elapsed_seconds || 0) / 6)) / 10;
+        html += '<div class="card"><h3>用量</h3><div style="display:flex;gap:12px;flex-wrap:wrap">'
+          + statCell((us.prompt_tokens || 0) + " / " + (us.completion_tokens || 0), "输入/输出 token")
+          + statCell(us.calls || 0, "LLM 调用")
+          + statCell(mins, "耗时（分）")
+          + statCell(st.reused_units || 0, "同源复用")
+          + "</div>"
+          + (subs ? '<div style="margin-top:8px;height:8px;background:#eee;border-radius:4px;overflow:hidden">'
+            + '<div style="height:100%;width:' + pct + '%;background:#4caf50"></div></div>'
+            + '<div style="margin-top:4px;font-size:12px;color:#666">子批 ' + (st.sub_batches_done || 0) + " / " + subs + "</div>" : "")
+          + "</div>";
+      }
+      let actions = [];
+      if (currentRunId) {
+        const a = await doFetch("/api/agent/actions?run=" + encodeURIComponent(currentRunId));
+        actions = a.actions || [];
+      } else if (s.queue && s.queue.length) {
+        actions = [];
+      }
+      const done = actions.filter(x => x.status !== "pending");
+      const pending = actions.filter(x => x.status === "pending");
+      if (done.length) {
+        html += '<div class="card"><h3>动作流（' + done.length + "）</h3>"
+          + '<div class="actions">' + done.map(renderAction).join("") + "</div></div>";
+      }
+      if (pending.length) {
+        html += '<div class="card"><h3>待审批（' + pending.length + "）</h3>"
+          + pending.map(renderApproval).join("") + "</div>";
+      }
+      $("live-panel").innerHTML = html || "";
+    }
+
+    function renderStep(s) {
+      const st = s.status === "done" ? "done" : s.status === "pending" ? "todo" : "active";
+      const icon = st === "done" ? "✓" : st === "active" ? "▶" : "○";
+      return '<div class="step ' + st + '"><span class="step-ic ' + st + '">' + icon
+        + '</span><span class="txt">' + esc(s.title) + '</span><span class="tool">'
+        + esc(s.tool) + "</span></div>";
+    }
+
+    function renderAction(a) {
+      const cls = statusClass(a.status);
+      const icon = cls === "done" ? "✓" : cls === "failed" ? "✕" : "◌";
+      return '<details class="action"><summary><span class="a-ic ' + cls + '">' + icon
+        + '</span><span class="a-name">' + esc(a.tool) + '</span><span class="tag">'
+        + esc(a.category) + '</span><span class="a-meta">' + esc(a.status)
+        + " · #" + esc(a.id) + "</span></summary>"
+        + '<div class="a-body">args：<pre>' + esc(JSON.stringify(a.args || {}, null, 2))
+        + "</pre>"
+        + (a.result ? "result：<pre>" + esc(a.result) + "</pre>" : "")
+        + (a.error ? "error：<pre>" + esc(a.error) + "</pre>" : "")
+        + "</div></details>";
+    }
+
+    function renderApproval(a) {
+      const argsText = esc(JSON.stringify(a.args || {}, null, 2));
+      return '<div class="approval">'
+        + '<div class="a-head"><span class="a-ic pending">◌</span>'
+        + '<span class="a-title">待批准 · ' + esc(a.tool) + '</span>'
+        + '<span class="tag ' + esc(a.category) + '">' + esc(a.category) + '</span>'
+        + '<span class="hint" style="margin-left:auto">动作 #' + esc(a.id)
+        + " · " + esc(fmtTime(a.created_at)) + "</span></div>"
+        + '<div class="a-desc">' + esc(a.tool) + " 参数：" + argsText + "</div>"
+        + '<div class="a-actions">'
+        + '<button class="btn ok" data-approve="' + a.id + '">批准并执行</button> '
+        + '<button class="btn danger" data-reject="' + a.id + '">驳回</button>'
+        + "</div></div>";
+    }
+
+    // ------------------------------------------------------------------ 侧栏
+
+    async function loadSidebar() {
+      if (!project) return;
+      const [ov, terms, wb, runs] = await Promise.allSettled([
+        doFetch("/api/overview"),
+        doFetch("/api/terms?status=candidate"),
+        doFetch("/api/worldbook"),
+        doFetch("/api/runs"),
+      ]);
+      if (ov.status === "fulfilled") {
+        const d = ov.value;
+        $("side-stats").innerHTML =
+          statCell(d.units.translated + "/" + d.units.total, "已译单元")
+          + statCell(d.terms.locked, "锁定术语")
+          + statCell(d.terms.candidate, "待决术语")
+          + statCell(d.pending_approvals, "待审批");
+      }
+      if (terms.status === "fulfilled") {
+        const list = terms.value.terms || [];
+        $("side-terms-badge").textContent = list.length + " 候选";
+        $("side-terms-list").innerHTML = list.slice(0, 5).map(t =>
+          '<div class="side-item"><span class="k">' + esc(t.source) + " → " + esc(t.target || "？")
+          + "</span><span class=\"tag\">" + esc(t.confidence || "") + "</span></div>"
+        ).join("") || '<div class="side-empty">（暂无候选）</div>';
+      }
+      if (wb.status === "fulfilled") {
+        const list = wb.value.entries || [];
+        $("side-worldbook-badge").textContent = list.length;
+        $("side-worldbook-list").innerHTML = list.slice(0, 5).map(e =>
+          '<div class="side-item"><span class="k">' + esc(e.title)
+          + '</span><span class="badge ' + (e.active ? "ok" : "") + '">'
+          + (e.active ? "active" : "inactive") + "</span></div>"
+        ).join("") || '<div class="side-empty">（暂无条目）</div>';
+      }
+      if (runs.status === "fulfilled") {
+        const list = runs.value.runs || [];
+        $("side-runs-list").innerHTML = list.slice(0, 6).map(r =>
+          '<div class="side-item"><span class="k">' + esc(r.kind || "run") + " · "
+          + esc(r.run_id) + '</span><span class="badge ' + statusClass(r.status) + '">'
+          + esc(r.status) + "</span></div>"
+        ).join("") || '<div class="side-empty">（暂无运行）</div>';
+      }
+    }
+
+    function statCell(num, label) {
+      return '<div class="stat-cell"><div class="stat-num">' + esc(num)
+        + '</div><div class="stat-label">' + esc(label) + "</div></div>";
+    }
+
+    // ------------------------------------------------------------------ 动作
+
+    async function sendGoal() {
+      const input = $("chat-input");
+      const goal = input.value.trim();
+      if (!goal) return;
+      try {
+        await doFetch("/api/agent/goal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            goal: goal,
+            autonomy: $("agent-autonomy").value,
+            max_turns: 0,
+          }),
+        });
+        input.value = "";
+        toast("目标已入队");
+        await refreshAll();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    async function stopAgent() {
+      try {
+        await doFetch("/api/agent/stop", { method: "POST" });
+        toast("已请求停止");
+        await refreshAll();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    async function resumeAgent() {
+      try {
+        await doFetch("/api/agent/resume", { method: "POST" });
+        toast("会话已继续");
+        await refreshAll();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    async function decideApproval(e) {
+      const btn = e.target.closest("[data-approve],[data-reject]");
+      if (!btn) return;
+      const id = btn.dataset.approve || btn.dataset.reject;
+      const action = btn.hasAttribute("data-approve") ? "approve" : "reject";
+      try {
+        await doFetch("/api/agent/actions/" + id + "/" + action, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: action === "reject" ? "人工驳回" : "" }),
+        });
+        toast(action === "approve" ? "已批准并执行" : "已驳回");
+        await refreshAll();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    // ------------------------------------------------------------------ 事件与初始化
+
+    $("project-select").addEventListener("change", async e => {
+      project = e.target.value;
+      localStorage.setItem(LS_PROJECT, project);
+      resetConversation();
+      await syncProjectConfig();
+      refreshAll();
+    });
+    $("btn-refresh").addEventListener("click", () => {
+      refreshAll().then(() => toast("已刷新"));
+    });
+    $("btn-settings").addEventListener("click", openConfigModal);
+    $("btn-config-save").addEventListener("click", saveConfig);
+    $("btn-restart-backend").addEventListener("click", restartBackend);
+    $("cfg-llm-profile").addEventListener("change", onProfileChange);
+    $("btn-config-cancel").addEventListener("click", closeConfigModal);
+    $("cfg-game-dir").addEventListener("change", updateGameDirManual);
+    $("btn-send").addEventListener("click", sendGoal);
+    $("chat-input").addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendGoal();
+      }
+    });
+    $("btn-stop").addEventListener("click", stopAgent);
+    $("btn-resume").addEventListener("click", resumeAgent);
+    $("live-panel").addEventListener("click", decideApproval);
+    $("goal-presets").addEventListener("click", e => {
+      const chip = e.target.closest("[data-goal]");
+      if (chip) $("chat-input").value = chip.dataset.goal;
+    });
+
+    async function init() {
+      try {
+        await loadProjects();
+        await syncProjectConfig(false);
+        await refreshSetupHint();
+      } catch (err) {
+        toast(err.message, true);
+      }
+      setInterval(() => {
+        if (!project) return;
+        loadSession().catch(() => {});
+        loadMessages().catch(() => {});
+        loadLive().catch(() => {});
+      }, 2000);
+      setInterval(() => {
+        if (!project) return;
+        loadSidebar().catch(() => {});
+        refreshSetupHint().catch(() => {});
+      }, 5000);
+    }
+
+    init();
+  </script>
+</body>
+</html>

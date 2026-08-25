@@ -179,6 +179,21 @@ export function tryTsPrepare(config: Config, args: PrepareArgs, sessionKey?: str
   }
 }
 
+/**
+ * 计算 Python 路由的失败上下文：为什么 prepare 走 Python（供失败输出前置，
+ * 让「python -m tav2 找不到模块 / SDK 缺失」等失败一眼看懂原因与解法）。
+ * 配置不可解析时返回 undefined，由 Python 链路自带诊断。
+ */
+export function pythonRouteContext(config: Config, args: PrepareArgs, sessionKey?: string): string | undefined {
+  try {
+    const plan = planTsPrepare(config, args, sessionKey)
+    if (plan.mode === 'python') return `prepare 走 Python 的原因：${plan.reason}`
+  } catch {
+    /* 配置不可解析时交给 Python 链路自带诊断 */
+  }
+  return undefined
+}
+
 export function registerPrepareTool(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'tav2_prepare',
@@ -239,12 +254,14 @@ export function registerPrepareTool(ctx: Context, config: Config): void {
       const cliArgs = buildPrepareArgs(args)
       // 无每调用 --sdk 时，把 config.renpySdk 自动带上（rpyc 游戏免手动传参）。
       if (!args.sdk && resolvePrepareSdk(config, args)) cliArgs.push('--sdk', resolvePrepareSdk(config, args) as string)
+      // 失败输出前置「为什么走 Python」，不再只丢一句「No module named tav2」。
+      const context = pythonRouteContext(config, args, sessionKeyOf(exec))
       const label = `tav2 prepare${args.game ? ` ${args.game}` : ''}（Python SDK/unrpyc 子进程）`
       return startJobOrFallback(ctx, config, exec, {
         label,
-        start: () => startTav2Job(ctx, config, { label, args: cliArgs }, exec.agent),
+        start: () => startTav2Job(ctx, config, { label, args: cliArgs, context }, exec.agent),
         foreground: async (signal) => {
-          const t = resultToTool(await runTav2({ config, args: cliArgs, signal }))
+          const t = resultToTool(await runTav2({ config, args: cliArgs, context, signal }))
           return { ok: t.ok, text: `${t.command}\n${t.text}`, timedOut: t.timedOut }
         },
       })

@@ -1,5 +1,9 @@
 node_modules/
 dist/
+
+# Python 内置后端（python/）的字节码缓存
+__pycache__/
+*.pyc
 *.log
 .DS_Store
 .vitest/

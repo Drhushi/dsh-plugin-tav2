@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tav2",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness 插件：把 tav2（TranslateAgent v2）翻译流水线接入 dsh。",
   "type": "module",
   "main": "dist/index.js",
@@ -16,6 +16,7 @@
   "files": [
     "dist",
     "scripts",
+    "python",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
