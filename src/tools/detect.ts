@@ -38,7 +38,7 @@ export function runTsDetect(config: Config, path?: string): Tav2DetectResult {
 export function registerDetectTool(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'tav2_detect',
-    description: '只读探测游戏根目录的引擎类型与文件布局（当前仅支持 Ren\'Py；识别到 Unity/Yarn 会明确提示不再支持）。',
+    description: '只读探测游戏根目录的引擎类型与文件布局（当前适配器仅实现 Ren\'Py；识别到 Unity/Yarn 布局会明确提示暂不可用）。',
     parameters: {
       path: {
         type: 'string',

@@ -8,11 +8,12 @@
  * - 重复 pick 幂等替换（先清旧字体文件与覆盖）。非侵入契约：只写 tl/<lang> 与 config.yaml。
  */
 import { existsSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
 import { approvalDenialText, requestApproval } from '../core/approval'
+import { resolvePythonRepo } from '../core/tav2'
 import type { Tav2ToolResult } from '../core/types'
 import { loadEngineConfigFor, resolveConfigPath } from '../engine/config'
 import { enumerateFonts, type FontCandidate } from '../engine/fonts/scan'
@@ -23,6 +24,7 @@ import {
   readConfigFonts,
 } from '../engine/fonts/patch'
 import { resolveLang, sessionKeyOf } from './select_project'
+import { resolveSourceGameDirs } from '../engine/adapters/renpy/sourceDir'
 import { tsKnowledgeResult } from './tsKnowledge'
 
 export type FontToolAction = 'list' | 'pick'
@@ -174,6 +176,26 @@ function findCandidate(candidates: FontCandidate[], font: string): FontCandidate
   return undefined
 }
 
+/**
+ * 编译版游戏的反编译源码目录（gui 变量确认用）。
+ * 新约定：<游戏根>/tav2_src/game（prepare 重构后源码参考随游戏根存放）；
+ * 兼容旧链路：game_dir 指向旧暂存根（<名>_prep）时其自身 game/ 即源码，
+ * 以及插件 python 仓库 work/<游戏名>_prep/game。无任何候选时返回空。
+ */
+export function prepSourceDirs(config: Config, gameDir: string): string[] {
+  const dirs = resolveSourceGameDirs(gameDir)
+  if (gameDir && /_prep$/.test(basename(gameDir))) {
+    const ownGame = join(gameDir, 'game')
+    if (existsSync(ownGame)) dirs.push(ownGame)
+  }
+  const repo = resolvePythonRepo(config)
+  if (repo && gameDir) {
+    const stagingGame = join(repo, 'work', `${basename(gameDir)}_prep`, 'game')
+    if (existsSync(stagingGame)) dirs.push(stagingGame)
+  }
+  return dirs
+}
+
 /** pick：只读规划 + 审批预览（不写盘）。 */
 export function runTsFontPick(config: Config, args: FontToolArgs, sessionKey?: string): Tav2FontResult {
   try {
@@ -194,7 +216,7 @@ export function runTsFontPick(config: Config, args: FontToolArgs, sessionKey?: s
     }
     const configPath = configPathOf(config)
     const plan = buildFontPickPlan(engineCfg.gameDir, configPath, hit.path, lang)
-    const confirmVars = confirmGuiTextFont(engineCfg.gameDir)
+    const confirmVars = confirmGuiTextFont(engineCfg.gameDir, prepSourceDirs(config, engineCfg.gameDir))
     const lines = [
       `将应用字体「${plan.name}」（id=${hit.id}，来源=${hit.source}）到 tl/${lang}/font/：`,
       `  写入字体: ${plan.fontPath}`,
@@ -237,7 +259,7 @@ export function runTsFontPickWrite(config: Config, args: FontToolArgs, sessionKe
     }
     const configPath = configPathOf(config)
     const plan = buildFontPickPlan(engineCfg.gameDir, configPath, hit.path, lang)
-    const confirmVars = confirmGuiTextFont(engineCfg.gameDir)
+    const confirmVars = confirmGuiTextFont(engineCfg.gameDir, prepSourceDirs(config, engineCfg.gameDir))
     const applied = applyFontPick(plan, confirmVars)
     const view: FontPickView = {
       id: hit.id,

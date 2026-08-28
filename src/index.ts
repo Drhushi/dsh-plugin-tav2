@@ -5,6 +5,11 @@ import { handleModeCommand, MODE_SETTINGS_NS, modeStatePath, readStateApi, write
 import { tav2SettingsSchema, resolveChannelApi } from './tav2Settings'
 import { describeChannelSync, mergeTranslationApi } from './tools/translationApi'
 import { applyTranslationScope, handleLangCommand, recordRegistration, registrationOf } from './translation_scope'
+// 注意：./tools/panel 必须在 ./translation_scope 之后 import——panel → select_project →
+// translation_scope → tools/index 存在既有导入环；若 panel 先于 translation_scope 求值，
+// tools/index 会在 select_project 求值中途构建 TOOL_REGISTRY，导致 tav2_select_project 注册缺失。
+import { registerPanelRoute } from './tools/panel'
+import { registerPanelCommand } from './tools/panel_commands'
 import { pluginSource, pluginVersion } from './version'
 
 export const name = 'dsh-plugin-tav2'
@@ -146,6 +151,20 @@ export function apply(ctx: Context, config: Config): void {
     `[dsh-plugin-tav2] 设置卡通道：settings=${settings ? 'ok' : 'missing'}`
     + ` ns=${nsRegistered ? 'registered' : 'skipped'} commands=${commands ? 'ok' : 'missing'}`,
   )
+
+  // 2c) 翻译工作台：/tav2/panel 只读路由（会话级「翻译」标签页数据源）+ /tav2-panel 命令
+  //     （面板交互按钮 → 确定性执行对应 tav2_* 工具，写操作审批由工具自带）。
+  //     webServer / commands 缺失（如非 web profile）时内部告警跳过，不阻塞。
+  try {
+    registerPanelRoute(ctx)
+  } catch (err) {
+    console.warn('[dsh-plugin-tav2] /tav2/panel 路由注册失败：', err)
+  }
+  try {
+    registerPanelCommand(ctx)
+  } catch (err) {
+    console.warn('[dsh-plugin-tav2] /tav2-panel 命令注册失败：', err)
+  }
 
   // 3) agent/created：一律按工作区自动安装翻译作用域（游戏区全套 / 普通区轻量引导）。
   //    不再依赖自动识别开关——开关已移除，无需用户输入 /tav2-mode on。

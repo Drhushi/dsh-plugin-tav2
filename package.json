@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-tav2",
-  "version": "0.1.1",
-  "description": "DeepSeek Harness 插件：把 tav2（TranslateAgent v2）翻译流水线接入 dsh。",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness 插件：对话式游戏本地化，把 tav2（TranslateAgent v2）翻译流水线接入 dsh。引擎适配器架构，首发支持 Ren'Py。",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,8 +15,13 @@
   },
   "files": [
     "dist",
-    "scripts",
-    "python",
+    "scripts/install-plugin.ps1",
+    "scripts/postbuild.mjs",
+    "scripts/build-client.mjs",
+    "scripts/renpy_pack_rpa.py",
+    "python/README.md",
+    "python/requirements.txt",
+    "python/tav2",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -30,14 +35,18 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "ab": "tsx scripts/ab-run.ts",
+    "ab-structure": "tsx scripts/ab-structure.ts",
+    "prepack": "node scripts/clean-python-cache.mjs",
     "prepare": "npm run build"
   },
   "keywords": [
     "dsh",
     "deepseek-harness",
     "translation",
+    "localization",
+    "game-localization",
     "renpy",
-    "novel"
+    "visual-novel"
   ],
   "license": "MIT",
   "dependencies": {

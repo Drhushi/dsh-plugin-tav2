@@ -26,6 +26,9 @@ const BLOCK_SKIP_KEYWORDS = new Set([
   'layeredimage',
   'default',
   'define',
+  // 游戏自带的 translate 块（语言文件 / 已有翻译）不是母语源文本：块体里的赋值
+  // （gui.text_font = "..."）和译文 say 会被误当成对话单元（S17 噪声 + 待译队列污染）。
+  'translate',
 ])
 const TRANSLATABLE_RAW = new Set(['voice', 'voice sustain', 'nvl clear'])
 const PLAIN_KEYWORDS = new Set([
@@ -214,8 +217,14 @@ function parseSay(text: string, line: number): SayLine {
     idx = 1
     let inTemp = false
     while (idx < tokens.length && tokens[idx]![0] !== 'STR') {
-      if (tokens[idx]![0] === 'PUNCT' && tokens[idx]![1] === '@') inTemp = true
-      else (inTemp ? temps : attrs).push(tokens[idx]![1])
+      if (tokens[idx]![0] === 'PUNCT') {
+        // say 的 who/属性区只有词与 @；出现括号等标点说明是函数调用等表达式语句
+        // （如 renpy.register_shader(...)），当 say 解析会产出非法说话人单元。
+        if (tokens[idx]![1] !== '@') {
+          throw new ParseError(`第 ${line} 行：who/属性区出现标点 ${tokens[idx]![1]}，非 say 语句`)
+        }
+        inTemp = true
+      } else (inTemp ? temps : attrs).push(tokens[idx]![1])
       idx += 1
     }
   }
@@ -411,8 +420,10 @@ export class RestructurerReplica {
       }
 
       if (kind === 'init') {
-        const words = text.split(/\s+/).slice(0, 2)
-        const isInitPython = words.length >= 2 && words[0] === 'init' && words[1]!.replace(/:$/, '') === 'python'
+        // init [优先级] python: 块体是 Python 语句（config.x = "..."），不是 say；
+        // 旧实现只匹配字面 `init python`，`init -2 python:` 会走进块体把赋值解析成对话。
+        const words = text.replace(/:$/, '').split(/\s+/)
+        const isInitPython = words.length > 0 && words[0] === 'init' && words.slice(1).includes('python')
         if (!isInitPython) this.walk(this.children(stmts, i))
         i = this.afterBlock(stmts, i)
         continue

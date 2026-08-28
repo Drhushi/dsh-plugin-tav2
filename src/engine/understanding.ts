@@ -5,7 +5,7 @@ import type { Generate } from './llm'
 import { extractJson } from './llm'
 import type { MemoryPack } from './memory'
 import { UnderstandingRecord, type Scene } from './models'
-import { understandingPrompt } from './prompts'
+import { understandingPrompt, styleInstruction } from './prompts'
 
 /** 为场景生成结构化理解记录；解析失败返回 null（不阻塞翻译）。 */
 export async function generateUnderstanding(
@@ -20,8 +20,14 @@ export async function generateUnderstanding(
   const reasoning = cfg.context.understandingReasoningEffort || undefined
   try {
     const result = await generate.generate({
-      system: understandingPrompt(),
+      // 场景级口吻判断：理解提示词注入翻译风格，要求产出 tone（场景文风指引）。
+      system: understandingPrompt(styleInstruction(
+        cfg.translation.stylePreset,
+        cfg.translation.stylePrompt,
+        cfg.translation.head,
+      )),
       messages: [{ role: 'user', content: userMessage(scene, sourceText, memory) }],
+      meta: { stage: 'understanding', sceneId: scene.scene_id },
       ...(reasoning ? { reasoningEffort: reasoning } : {}),
       ...(signal ? { signal } : {}),
     })
@@ -33,6 +39,7 @@ export async function generateUnderstanding(
       term_usage: (data.term_usage ?? []) as UnderstandingRecord['term_usage'],
       style_notes: (data.style_notes ?? []) as UnderstandingRecord['style_notes'],
       flags: (data.flags ?? []) as UnderstandingRecord['flags'],
+      tone: String(data.tone ?? ''),
     })
     record.raw = data
     return record

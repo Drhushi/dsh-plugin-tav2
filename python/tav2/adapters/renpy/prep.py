@@ -1,8 +1,14 @@
 """编译版 Ren'Py 游戏一键翻译准备（移植自 v1 translate_agent/prep.py）。
 
 自动完成：版本探测 → SDK 定位 → 抽取归档脚本（.rpyc/.rpymc/.rpy，不抽资源）
-→ unrpyc 官方 master 反编译 → staging 组装（game/ 内绝无 archive.rpa，防双载）
-→ 官方模板生成（tl/<lang>）→ 标识符一致性验证（原版 rpyc 运行时 dump 比对，缺失 0）。
+→ unrpyc 官方 master 反编译 → 源码参考目录组装（game/ 内绝无 archive.rpa，防双载）
+→ 官方模板生成（tl/<lang>）→ 模板落真实游戏目录 → 标识符一致性验证
+（原版 rpyc 运行时 dump 比对，缺失 0）。
+
+目录约定（默认）：
+- 反编译源码参考：<游戏根>/tav2_src/（引擎不加载它，仅供 gui 变量确认/排查/结项后清理）；
+- 翻译模板与译文：<游戏根>/game/tl/<lang>/（真实游戏目录，实机可直接加载验证）；
+- 显式传 --work 时保留旧暂存区语义：<work>/<游戏名>_prep。
 
 用法见 cli.py 的 `prepare` 子命令（--game/--sdk/--work）。
 """
@@ -214,19 +220,19 @@ def cleanup_compiled_artifacts(game_dir: Path) -> None:
 def _build_game_dir(
     real_game: Path,
     sdk: Path,
-    work_root: Path,
+    parent_root: Path,
     name: str,
     unrpyc: Path,
     extractor: Path | None = None,
 ) -> Path:
-    """建 staging：抽脚本 + 反编译 + 组装。返回 staging 游戏根目录。"""
+    """建源码参考目录：抽脚本 + 反编译 + 组装。返回游戏根目录（含 game/）。"""
 
-    root = work_root / name
+    root = parent_root / name
     game = root / "game"
-    work_resolved = work_root.resolve()
+    parent_resolved = parent_root.resolve()
     root_resolved = root.resolve()
     if game.exists():
-        if root_resolved == work_resolved or work_resolved not in root_resolved.parents:
+        if root_resolved == parent_resolved or parent_resolved not in root_resolved.parents:
             raise SystemExit(f"拒绝重建非工作区目录：{root}")
         shutil.rmtree(root, ignore_errors=True)
     game.mkdir(parents=True)
@@ -239,15 +245,15 @@ def _build_game_dir(
     print("== 反编译 ==")
     decompile(sdk, game, unrpyc)
 
-    print("== 组装 staging（清理编译产物、补松散文件）==")
+    print("== 组装源码参考目录（清理编译产物、补松散文件）==")
     copy_loose_files(real_game, game)
     # 先补松散文件（如 *_ren.py）再清理：cleanup 需要根据 _ren.py 判断保留哪个版本
     cleanup_compiled_artifacts(game)
     return root
 
 
-def generate_templates(sdk: Path, staging_root: Path, lang: str) -> None:
-    """用官方 SDK 在 staging（无 archive.rpa）上生成 tl/<lang> 模板。"""
+def generate_templates(sdk: Path, source_root: Path, lang: str) -> None:
+    """用官方 SDK 在源码参考目录（无 archive.rpa）上生成 tl/<lang> 模板。"""
 
     print("== SDK 生成官方模板 ==")
     proc = run_renpy(sdk / "renpy.exe", staging_root, ["translate", lang], timeout=900)
@@ -343,7 +349,7 @@ def cmd_prepare(
     keep_verify: bool = False,
     cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """编译版游戏一键 prepare 入口。返回统计字典并写报告 JSON 到 work 根。"""
+    """编译版游戏一键 prepare 入口。返回统计字典并写报告 JSON 到源码参考目录。"""
 
     game_dir = Path(game_dir)
     if not (game_dir / "game").is_dir():
@@ -356,28 +362,42 @@ def cmd_prepare(
         raise SystemExit("未找到匹配 SDK，请用 --sdk 指定（版本须与游戏一致）")
     print(f"SDK：{sdk_path}")
 
-    work_root = Path(work_root or (PROJECT_ROOT / "work"))
-    work_root.mkdir(parents=True, exist_ok=True)
-    name = game_dir.name + "_prep"
+    # 源码参考目录：默认放 <游戏根>/tav2_src（用户可见、结项可清）；
+    # 显式 --work 保留旧暂存区语义（<work>/<游戏名>_prep）。
+    if work_root is not None:
+        verify_root_parent = Path(work_root)
+        verify_root_parent.mkdir(parents=True, exist_ok=True)
+        source_root = verify_root_parent / (game_dir.name + "_prep")
+    else:
+        verify_root_parent = PROJECT_ROOT / "work"
+        verify_root_parent.mkdir(parents=True, exist_ok=True)
+        source_root = game_dir.parent / "tav2_src"
     unrpyc_path = resolve_unrpyc(unrpyc, cfg)
 
-    staging = _build_game_dir(game_dir / "game", sdk_path, work_root, name, unrpyc_path)
-    generate_templates(sdk_path, staging, lang)
-    # Ren'Py 生成模板时会向 scripts/ 写回 .rpyc，收尾清理保持 staging 整洁
-    cleanup_compiled_artifacts(staging / "game")
+    source_dir = _build_game_dir(game_dir / "game", sdk_path, source_root.parent, source_root.name, unrpyc_path)
+    generate_templates(sdk_path, source_dir, lang)
+    # Ren'Py 生成模板时会向 scripts/ 写回 .rpyc，收尾清理保持源码参考目录整洁
+    cleanup_compiled_artifacts(source_dir / "game")
 
-    tl_dir = staging / "game" / "tl" / lang
-    if not tl_dir.is_dir():
+    staging_tl = source_dir / "game" / "tl" / lang
+    if not staging_tl.is_dir():
         raise SystemExit("模板目录未生成")
+
+    # 模板落到真实游戏目录（tl 全部为新增文件，符合非侵入契约）：
+    # 之后翻译 / 实机语言切换验证 / 封包都在真实游戏目录进行，源码参考目录只留反编译源码。
+    real_tl = game_dir / "game" / "tl" / lang
+    if real_tl.resolve() != staging_tl.resolve():
+        shutil.copytree(staging_tl, real_tl, dirs_exist_ok=True)
+        shutil.rmtree(staging_tl, ignore_errors=True)
 
     # 先用原版 rpyc 跑 lint 生成运行时标识符 dump（编译版的权威标识符集）
     verify = verify_identifiers(
         sdk_path,
         game_dir / "game",
-        work_root,
+        verify_root_parent,
         lang,
-        staging,
-        name,
+        source_dir,
+        source_root.name,
         keep=keep_verify,
     )
 
@@ -385,14 +405,15 @@ def cmd_prepare(
 
     renpy_cfg = (cfg or {}).get("renpy") or {}
     runtime_ids: set[str] | None = None
-    dump_path = staging / f"ta_identifiers_{lang}.json"
+    dump_path = source_dir / f"ta_identifiers_{lang}.json"
     if dump_path.exists():
         runtime_ids = {
             row["identifier"] for row in json.loads(dump_path.read_text(encoding="utf-8"))
         }
     integrity = template_integrity(
-        staging / "game",
+        game_dir / "game",
         lang,
+        source_dir=source_dir / "game",
         patch=bool(renpy_cfg.get("template_patch", True)),
         patch_strings=bool(renpy_cfg.get("patch_missing_strings", False)),
         runtime_ids=runtime_ids,
@@ -411,8 +432,8 @@ def cmd_prepare(
     from tav2.adapters.renpy import tlparser
     from tav2.tokens import estimate_tokens
 
-    font_stats = renpy_fonts.generate_font_patches(staging, lang, cfg or {})
-    _files, dialogue, strings = tlparser.load_work(staging, lang)
+    font_stats = renpy_fonts.generate_font_patches(game_dir, lang, cfg or {})
+    _files, dialogue, strings = tlparser.load_work(game_dir, lang)
     src_tokens = sum(estimate_tokens(u.source_text) for u in dialogue) + sum(
         estimate_tokens(s.source_text) for s in strings
     )
@@ -424,8 +445,8 @@ def cmd_prepare(
         "game": str(game_dir),
         "version": version,
         "sdk": str(sdk_path),
-        "staging": str(staging),
-        "tl": str(tl_dir),
+        "source_dir": str(source_dir),
+        "tl": str(real_tl),
         "dialogue": len(dialogue),
         "strings": len(strings),
         "source_tokens": src_tokens,
@@ -433,7 +454,15 @@ def cmd_prepare(
         "template_integrity": integrity,
         "identifier_verify": verify,
     }
-    report_path = work_root / f"{name}_report.json"
+    report_path = source_dir / "prepare_report.json"
     report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"报告：{report_path}")
+    print(
+        "\n== 下一步 ==\n"
+        f"翻译模板已写入真实游戏目录：{real_tl}\n"
+        f"反编译源码参考在 {source_dir}（引擎不加载它，仅供 gui 变量确认与排查）。\n"
+        "无需切换项目：tav2_status / tav2_translate_batch / tav2_check 直接绑定原游戏目录。\n"
+        "语言切换可立即实机验证（游戏内 设置→语言）；确认通过后再 tav2_pack 封包，\n"
+        "封包时可传 clean_source=true 清理源码参考目录。"
+    )
     return summary

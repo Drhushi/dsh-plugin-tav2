@@ -23,7 +23,8 @@ from tav2.adapters.renpy.renpy_models import DialogueUnit, SayLine, StringUnit
 
 HEADER_RE = re.compile(r"^translate\s+(\S+)\s+([^:]+):$")
 
-NON_SAY_PREFIXES = ("voice", "nvl", "pass", "if ", "else", "elif", "$", "python", "call", "jump")
+# old/new 只属于 strings 块；混进对话块（如旧版把游戏自带 translate 块写进模板）时不按 say 解析
+NON_SAY_PREFIXES = ("voice", "nvl", "pass", "if ", "else", "elif", "$", "python", "call", "jump", "old ", "new ")
 
 
 def _parse_string_literal(literal: str) -> str:
@@ -83,9 +84,17 @@ def _parse_say_line(text: str, indent: str = "") -> SayLine | None:
         idx = 1
         in_temp = False
         while idx < len(tokens) and tokens[idx][0] != "STR":
-            if tokens[idx] == ("PUNCT", "@"):
+            if tokens[idx][0] == "PUNCT":
+                # say 的 who/属性区只有词与 @；出现括号等标点说明是函数调用等表达式语句
+                # （如死块里回读的 renpy.register_shader(...)），当 say 解析会产出非法说话人单元。
+                if tokens[idx][1] != "@":
+                    return None
                 in_temp = True
             else:
+                # say 行的 who/属性位不可能含 =；含 = 的是赋值行（gui.text_font = "..."），
+                # 解析成 say 会产出非法说话人噪声单元（invalid_speakers / 待译队列污染）。
+                if tokens[idx][0] == "WORD" and "=" in tokens[idx][1]:
+                    return None
                 (temps if in_temp else attrs).append(tokens[idx][1])
             idx += 1
 
@@ -234,7 +243,8 @@ def load_work(
                     ],
                 )
                 for say, original in zip(chunk.say_lines, chunk.originals):
-                    say.original_what = original.what
+                    # original 可能为 None（注释行解析不成 say，如 `# file:line`）；与上方 L174 守卫对齐。
+                    say.original_what = original.what if original is not None else None
                 dialogue.append(unit)
             elif chunk.kind == "strings":
                 for pair in chunk.pairs:

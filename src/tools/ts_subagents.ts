@@ -25,7 +25,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from '../config'
 import { serviceResolvingContext } from '../harness'
 import { registerTranslationWorkerPersona, TRANSLATION_DELEGATION_CONTEXT } from '../persona'
-import { registerRenpyWorkflowSkill } from '../skills/renpyWorkflow'
+import { registerWorkflowSkill } from '../skills/workflow'
 import { registerTools } from './index'
 import { applyWorkspaceCwd } from './select_project'
 
@@ -309,7 +309,7 @@ export async function runTranslationWorker(request: TranslationWorkerRequest): P
         const childConfig = workerConfigFor(request.config, child.session.header.cwd, childIdText)
         const actx = serviceResolvingContext(childCtx)
         registerTools(actx, childConfig)
-        registerRenpyWorkflowSkill(actx)
+        registerWorkflowSkill(actx)
         registerTranslationWorkerPersona(actx)
         actx.systemPrompt.context({
           name: 'subagent:delegation',

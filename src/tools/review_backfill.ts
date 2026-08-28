@@ -17,6 +17,10 @@ export function registerReviewBackfillTool(ctx: Context, config: Config): void {
         required: true,
         description: '审校表 xlsx 的绝对路径（对应 --review-file）',
       },
+      force: {
+        type: 'boolean',
+        description: '忽略审校状态强制回填（人工/机器译文非空即应用；状态须为 已确认/已修改 才免此参）',
+      },
     },
     output: {
       schema: {
@@ -57,14 +61,15 @@ export function registerReviewBackfillTool(ctx: Context, config: Config): void {
 
       const label = `tav2 backfill ${args.reviewFile}`
       const cliArgs = ['backfill', '--review-file', args.reviewFile]
+      if (args.force) cliArgs.push('--force')
       if (config.engineBackend !== 'python') {
         return startJobOrFallback(ctx, config, exec, {
           label,
-          start: () => startTsReviewBackfillJob(ctx, config, { label, reviewFile: args.reviewFile }, exec.agent),
+          start: () => startTsReviewBackfillJob(ctx, config, { label, reviewFile: args.reviewFile, ...(args.force ? { force: true } : {}) }, exec.agent),
           foreground: async (_signal) => {
             let output = ''
             const log = (line: string) => { output += `${line}\n` }
-            const outcome = await runTsReviewBackfill(ctx, config, { label, reviewFile: args.reviewFile }, log)
+            const outcome = await runTsReviewBackfill(ctx, config, { label, reviewFile: args.reviewFile, ...(args.force ? { force: true } : {}) }, log)
             return {
               ok: outcome.status === 'completed',
               text: `${output}${outcome.detail}`.trim(),

@@ -5,7 +5,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { EngineConfig } from './config'
 import type { ProjectDB } from './db'
 import { bannedWordHits, ensureTranslationTag, tagsPreserved, termAudit } from './gates'
@@ -13,7 +13,8 @@ import type { Generate } from './llm'
 import { extractJson, TrackedGenerate } from './llm'
 import { buildMemoryPack } from './memory'
 import { Document, Scene, type Unit } from './models'
-import { polishPrompt, styleInstruction, summaryPrompt } from './prompts'
+import { polishPrompt, antiClichePrompt, styleInstruction, summaryPrompt } from './prompts'
+import { jsonlRecorder, RecordingGenerate } from './recording'
 import { MAX_RETRY_ROUNDS, rewriteScene } from './rewrite'
 import { writeReviewCsv } from './review'
 import { estimateTokens } from './tokens'
@@ -128,6 +129,7 @@ export function updateSummary(
   return generate.generate({
     system: '你是视觉小说剧情的摘要助手。',
     messages: [{ role: 'user', content: prompt }],
+    meta: { stage: 'summary' },
     signal,
   }).then((r) => r.text.trim())
 }
@@ -154,7 +156,10 @@ function polishScene(
     })
     .join('；')
   const summary = db.getSummary(scene.branch)
-  const prompt = polishPrompt(summary, profiles, styleInstruction(cfg.translation.stylePreset, cfg.translation.stylePrompt, cfg.translation.head))
+  const antiCliche = cfg.translation.antiCliche.enabled
+    ? antiClichePrompt(cfg.translation.antiCliche.categories)
+    : ''
+  const prompt = polishPrompt(summary, profiles, styleInstruction(cfg.translation.stylePreset, cfg.translation.stylePrompt, cfg.translation.head), antiCliche)
   const lines = ['待复查项：']
   for (const item of items) {
     lines.push(`标识符: ${item.key}`)
@@ -164,6 +169,7 @@ function polishScene(
   return generate.generate({
     system: '你是翻译一致性复查器。',
     messages: [{ role: 'user', content: `${prompt}\n\n${lines.join('\n')}` }],
+    meta: { stage: 'polish', sceneId: scene.scene_id },
     signal,
   }).then((r) => {
     try {
@@ -218,6 +224,10 @@ export interface TranslateStats {
   retry_rounds: number
   term_misses: number
   banned_hits: number
+  /** P1：反翻译腔禁令族命中数（无原文依据的触发词出现次数）。 */
+  anti_cliche_hits: number
+  /** P1：autoFix=true 时确定性移除的触发词数。 */
+  anti_cliche_fixed: number
   approvals_queued: number
   /** 重试后仍未产出合法译文、已转入人审的单元数。 */
   flagged_units: number
@@ -276,7 +286,13 @@ export async function runTranslate(
   const runId = randomUUID()
   const log = options.onLog ?? ((line: string) => console.log(line))
   db.beginRun(runId, 'translate')
-  const tracked = new TrackedGenerate(generate)
+  // 请求快照：默认开启录制，写到项目 DB 旁的 requests/（每 run 一个文件，供面板
+  // 「翻译过程 → 展开 → system/messages」查看）；显式配置 debug.request_snapshot_dir
+  // 时写往该目录（A/B 审计用，兼容旧行为但按 runId 分文件）。
+  const configuredSnapshotDir = cfg.debug.requestSnapshotDir.trim()
+  const snapshotDir = configuredSnapshotDir || join(dirname(db.path), 'requests')
+  const base = new RecordingGenerate(generate, jsonlRecorder(join(snapshotDir, `requests-${runId}.jsonl`)))
+  const tracked = new TrackedGenerate(base)
   const stats: TranslateStats = {
     run_id: runId,
     scenes_total: 0,
@@ -287,6 +303,8 @@ export async function runTranslate(
     retry_rounds: 0,
     term_misses: 0,
     banned_hits: 0,
+    anti_cliche_hits: 0,
+    anti_cliche_fixed: 0,
     approvals_queued: 0,
     flagged_units: 0,
     understanding_failed: 0,
@@ -386,8 +404,9 @@ async function processScene(
   const memory = await buildMemoryPack(db, cfg, scene, sources, mainBranch)
 
   let understanding = null
-  // Ren'Py：仅当单元类型非 string（如对话/旁白外的长文本）时走理解链路。
-  const wantsUnderstanding = units.some((u) => u.kind !== 'string')
+  // 场景级口吻判断：所有场景（含纯 string 场景，如合并后的全局 strings）都走理解链路，
+  // 产出 tone（场景文风指引）供重写把握基调；对话场景产出 scene_state/伏笔/术语/口癖。
+  const wantsUnderstanding = true
   if (wantsUnderstanding) {
     understanding = await generateUnderstanding(generate, cfg, scene, memory, signal)
     if (understanding) {
@@ -427,6 +446,10 @@ async function processScene(
           `[翻译] ${scene.scene_id} 子批 ${index + 1}/${subBatches.length} `
           + `第 ${failure.round + 1} 轮失败 ${failure.unitIds.length} 条：${failure.reason}`,
         )
+      },
+      (antiCliche) => {
+        stats.anti_cliche_hits += antiCliche.hits.length
+        if (cfg.translation.antiCliche.autoFix) stats.anti_cliche_fixed += antiCliche.hits.length
       },
     )
     const after = generate.usage.snapshot()

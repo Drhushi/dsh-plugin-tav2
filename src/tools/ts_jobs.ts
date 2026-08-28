@@ -257,6 +257,8 @@ export function startTsBatchTranslateJob(
 export interface StartTsReviewBackfillOptions {
   label: string
   reviewFile: string
+  /** 忽略审校状态强制回填（人工/机器译文非空即应用）。 */
+  force?: boolean
 }
 
 /** TS 审校 CSV 回填核心（写 tl + 同步 units/TM）；后台任务与前台降级共用。 */
@@ -271,10 +273,18 @@ export async function runTsReviewBackfill(
     const input = loadKnowledgeInput(config)
     const rows = readReviewCsv(options.reviewFile)
     db = new ProjectDB(input.dbPath)
-    const stats = backfillReviewCsv(input.engineCfg.gameDir, input.engineCfg.lang, rows)
-    const applied = iterAppliedRows(rows)
+    const stats = backfillReviewCsv(input.engineCfg.gameDir, input.engineCfg.lang, rows, options.force)
+    const applied = iterAppliedRows(rows, options.force)
     let synced = 0
+    let cleared = 0
     const units = input.document.allUnits()
+    // 回填即人工定论：同步清掉对应单元的 translation_failed 待审批，避免审校队列卡住。
+    const failedApprovals = new Map<string, number>()
+    for (const a of db.pendingApprovals()) {
+      if (String(a.kind ?? '') !== 'translation_failed') continue
+      const p = (a.payload ?? {}) as Record<string, unknown>
+      failedApprovals.set(String(p.source ?? ''), Number(a.id))
+    }
     for (const row of applied) {
       const unit = matchReviewUnit(row, units)
       if (!unit) continue
@@ -284,9 +294,17 @@ export async function runTsReviewBackfill(
       const fp = scene ? unitContextFp(unit, scene) : ''
       db.tmPut(unit.source, unit.unit_id, translation, fp)
       db.setUnitStatus(unit.unit_id, 'translated')
+      const approvalId = failedApprovals.get(unit.unit_id)
+      if (approvalId && db.decideApproval(approvalId, 'approved')) cleared += 1
       synced += 1
     }
-    log(`[tav2-ts] 审校回填完成：${JSON.stringify({ ...stats, db_synced: synced })}`)
+    log(`[tav2-ts] 审校回填完成：${JSON.stringify({ ...stats, db_synced: synced, ...(cleared ? { approvals_cleared: cleared } : {}) })}`)
+    // 拒绝静默 no-op：一行都没回填时按失败处理，把原因说明白（曾导致 agent 误以为成功后手工搬运 xlsx）。
+    if (stats.applied === 0 && stats.skipped > 0) {
+      const detail = Object.entries(stats.skipReasons).map(([k, v]) => `${k}×${v}`).join('；') || '未知原因'
+      log(`[tav2-ts] ⚠️ 没有任何行被回填（跳过 ${stats.skipped} 条：${detail}）。回填条件：状态=已确认/已修改 且 译文非空。`)
+      return { status: 'failed', detail: `no rows applied; skipped=${stats.skipped}（${detail}）` }
+    }
     return {
       status: 'completed',
       detail: `applied=${stats.applied} skipped=${stats.skipped} db_synced=${synced}`,

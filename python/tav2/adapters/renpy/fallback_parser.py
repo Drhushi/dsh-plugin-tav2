@@ -32,6 +32,9 @@ BLOCK_SKIP_KEYWORDS = {
     "layeredimage",
     "default",
     "define",
+    # 游戏自带的 translate 块（语言文件 / 已有翻译）不是母语源文本：块体里的赋值
+    # （gui.text_font = "..."）和译文 say 会被误当成对话单元（S17 噪声 + 待译队列污染）。
+    "translate",
 }
 TRANSLATABLE_RAW = {"voice", "voice sustain", "nvl clear"}
 PLAIN_KEYWORDS = {
@@ -216,7 +219,13 @@ def _parse_say(text: str, line: int) -> SayLine:
         idx = 1
         in_temp = False
         while idx < len(tokens) and tokens[idx][0] != "STR":
-            if tokens[idx] == ("PUNCT", "@"):
+            if tokens[idx][0] == "PUNCT":
+                # say 的 who/属性区只有词与 @；出现括号等标点说明是函数调用等表达式语句
+                # （如 renpy.register_shader(...)），当 say 解析会产出非法说话人单元。
+                if tokens[idx][1] != "@":
+                    raise ParseError(
+                        f"第 {line} 行：who/属性区出现标点 {tokens[idx][1]}，非 say 语句"
+                    )
                 in_temp = True
             else:
                 (temps if in_temp else attrs).append(tokens[idx][1])
@@ -388,10 +397,10 @@ class RestructurerReplica:
                 continue
 
             if kind == "init":
-                words = text.split()[:2]
-                is_init_python = (
-                    len(words) >= 2 and words[0] == "init" and words[1].rstrip(":") == "python"
-                )
+                # init [优先级] python: 块体是 Python 语句（config.x = "..."），不是 say；
+                # 旧实现只匹配字面 `init python`，`init -2 python:` 会走进块体把赋值解析成对话。
+                words = text.rstrip(":").split()
+                is_init_python = len(words) >= 1 and words[0] == "init" and "python" in words[1:]
                 if not is_init_python:
                     block = self._children(stmts, i)
                     self._walk(block)

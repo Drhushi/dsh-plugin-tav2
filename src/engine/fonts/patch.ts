@@ -59,8 +59,13 @@ export function buildFontsRpy(lang: string, fontRel: string): string {
   ].join('\n')
 }
 
-/** 在游戏源码 .rpy 中确认 gui.text_font 赋值是否存在（fail-closed 前置）。 */
-export function confirmGuiTextFont(gameDir: string): boolean {
+/**
+ * 在游戏源码 .rpy 中确认 gui.text_font 赋值是否存在（fail-closed 前置）。
+ * 编译版（.rpa/.rpyc）游戏目录里没有 .rpy 源码——调用方应把 Python prepare
+ * 暂存区的反编译源码目录（<staging>/game）传入 extraSourceDirs 作为确认来源，
+ * 否则纯编译游戏永远确认不到，样式覆盖恒被 fail-closed 拦下。
+ */
+export function confirmGuiTextFont(gameDir: string, extraSourceDirs: readonly string[] = []): boolean {
   const re = /gui\.text_font\s*=/
   const walk = (dir: string): boolean => {
     let entries: { name: string; isDir: boolean }[]
@@ -87,7 +92,7 @@ export function confirmGuiTextFont(gameDir: string): boolean {
     }
     return false
   }
-  return walk(resolveGameDir(gameDir))
+  return walk(resolveGameDir(gameDir)) || extraSourceDirs.some((dir) => walk(dir))
 }
 
 /** 读取 config.yaml 中已记录的 fonts 段（只读，缺失/损坏返回空）。 */

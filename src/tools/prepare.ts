@@ -115,6 +115,8 @@ export interface TsPrepareRunResult {
   templateFiles: string[]
   dialogueUnits: number
   stringUnits: number
+  /** 幂等合并统计（重跑 prepare / 游戏自带 tl 时非空）：保留的已有已译块 / 追加的缺失块。 */
+  merged?: { preservedBlocks: number; addedBlocks: number }
 }
 
 /**
@@ -153,16 +155,21 @@ export function tryTsPrepare(config: Config, args: PrepareArgs, sessionKey?: str
     }
     const parseDir = overlay ?? plan.gameDir
     const result = prepareTemplates(plan.gameDir, plan.lang, parseDialogueUnits, { parseDir })
+    const mergeText = result.merged
+      ? `\n已有 tl/${plan.lang}：保留 ${result.merged.preservedBlocks} 个已译块（未覆盖），新增 ${result.merged.addedBlocks} 个模板块。`
+      : ''
     return {
       ok: true,
       command: `prepare lang=${plan.lang}（TS 原生）`,
       text: `已生成 tl/${plan.lang} 翻译模板（TS 原生，未调用 Python）：\n`
         + result.templateFiles.map((f) => `  ${f}`).join('\n')
-        + `\n对话单元 ${result.dialogueUnits} 条、字符串 ${result.stringUnits} 条。`,
+        + `\n对话单元 ${result.dialogueUnits} 条、字符串 ${result.stringUnits} 条。`
+        + mergeText,
       timedOut: false,
       templateFiles: result.templateFiles,
       dialogueUnits: result.dialogueUnits,
       stringUnits: result.stringUnits,
+      ...(result.merged ? { merged: result.merged } : {}),
     }
   } catch (err) {
     return {

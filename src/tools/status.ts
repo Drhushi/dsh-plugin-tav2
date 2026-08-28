@@ -10,6 +10,7 @@ import { renpyAdapter } from '../engine/adapters'
 import type { RuntimeRequirement } from '../engine/adapters'
 import { summarizeRuntime } from '../engine/runtime/summary'
 import { computeGameFingerprint, fingerprintChanged, readFingerprintSnapshot } from '../core/fingerprint'
+import { migrateLegacyPrepProject } from '../engine/config'
 import { statusMeta } from '../present/meta'
 import { pluginSource, pluginVersion } from '../version'
 
@@ -33,6 +34,8 @@ export interface Tav2StatusSummary {
   lockedTerms: number
   pendingTerms: number
   worldbookEntries: number
+  /** 世界书待确认条目数（proposed，与世界书计数同口径；与 pendingApprovals 无关）。 */
+  worldbookProposed: number
   pendingApprovals: number
   complianceStatus: string
   complianceAuthorized: boolean
@@ -54,6 +57,13 @@ export interface Tav2StatusResult extends Tav2ToolResult {
 
 /** engineBackend=ts：从 TS 引擎读取项目状态。 */
 export function runTsStatus(config: Config, statePath?: string): Tav2StatusResult {
+  // prepare 重构后的旧→新项目数据迁移（幂等：仅当旧 _prep 目录有 DB 且新目录还没有时拷贝）。
+  let migratedNote = ''
+  try {
+    migratedNote = migrateLegacyPrepProject(config) ?? ''
+  } catch {
+    // 迁移失败不阻断状态读取
+  }
   const knowledge = openKnowledge(config)
   try {
     // 状态展示用「合并后」的翻译通道（yaml 层 + 设置卡当前渠道的 state.json 层），
@@ -76,6 +86,7 @@ export function runTsStatus(config: Config, statePath?: string): Tav2StatusResul
       lockedTerms: knowledge.db.lockedTerms().length,
       pendingTerms: knowledge.db.pendingTerms().length,
       worldbookEntries: knowledge.db.loadWorldbook().length,
+      worldbookProposed: knowledge.db.listWorldbook('proposed').length,
       pendingApprovals: knowledge.db.pendingApprovals().length,
       complianceStatus: compliance.status,
       complianceAuthorized: compliance.authorized === true,
@@ -120,12 +131,14 @@ export function runTsStatus(config: Config, statePath?: string): Tav2StatusResul
       `项目 DB：${knowledge.db.path}`,
       `场景：${status.scenes}  单元：${status.units}  待译：${status.pendingUnits}`,
       `锁定术语：${status.lockedTerms}  待决候选：${status.pendingTerms}`,
-      `世界书条目：${status.worldbookEntries}  待审批：${status.pendingApprovals}`,
+      `世界书条目：${status.worldbookEntries}（待确认 ${status.worldbookProposed}）`,
+      `写操作待审批：${status.pendingApprovals}（推敲待决 / 翻译失败等审批队列，与世界书条目数无关）`,
       status.translationChannel,
       `G-1 授权：${status.complianceStatus} / ${complianceLabel}`,
       summary ? `[main 摘要] ${summary.slice(0, 80)}…` : '',
       status.runtime ? `运行时层：${status.runtime.runtimeLayer === 'ok' ? '✅ ok' : status.runtime.runtimeLayer === 'unverified' ? '⚠️ 未验证' : status.runtime.runtimeLayer === 'warn' ? '⚠️ warn' : '❌ fail'} / 模式 ${status.runtime.mode?.kind ?? 'unknown'} / 伴侣：${status.runtime.requirements.length ? status.runtime.requirements.map((r) => `${r.name}${r.installed ? '✓' : '❌'}`).join('、') : '无'}` : '',
       fingerprintLine ? fingerprintLine : '',
+      migratedNote,
     ].filter(Boolean).join('\n')
     return { ...tsKnowledgeResult(text), status }
   } catch (err) {
@@ -198,6 +211,7 @@ export const tav2StatusJsonSchema = {
     lockedTerms: { type: 'number' },
     pendingTerms: { type: 'number' },
     worldbookEntries: { type: 'number' },
+    worldbookProposed: { type: 'number' },
     pendingApprovals: { type: 'number' },
     translationChannel: { type: 'string' },
     complianceStatus: { type: 'string' },

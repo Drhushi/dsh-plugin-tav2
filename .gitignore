@@ -10,6 +10,8 @@ __pycache__/
 coverage/
 work/*
 !work/sync-plugin-dist.ps1
+# Python 后端翻译工作区的游戏 prep 副本（tav2_prepare 生成，可重建）
+/python/work/
 projects/
 config.yaml
 .pnpm-store/

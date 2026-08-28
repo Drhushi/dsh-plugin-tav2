@@ -30,17 +30,28 @@ export interface FontCandidate {
 
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc']
 
-/** 文件名片段：命中即视为 CJK 字体（与 verify.ts 的启发式一致，并补充常见项）。 */
-export const CJK_FONT_HINTS = [
-  'noto', 'wqy', 'sourcehan', 'source_han', '思源', 'msyh', 'simhei', 'simsun',
-  'yahei', 'cjk', 'simkai', 'simfang', 'dengxian', 'mingliu', 'songti', 'heiti',
+/** 中文（简/繁）强标记：命中即视为中文 CJK，优先于日文排除（覆盖既有专用字名）。 */
+const ZH_FONT_HINTS = [
+  'wqy', 'wenquanyi', 'sourcehan', 'source_han', '思源', 'msyh', 'msjh',
+  'simhei', 'simsun', 'simkai', 'simfang', 'dengxian', 'mingliu',
+  'songti', 'heiti',
 ]
 
-/** 家族/全名里的强 CJK 标记（元数据兜底；避免 'sc'/'cn' 这类过宽子串）。 */
-const CJK_NAME_HINTS = [
-  'noto', 'source han', '思源', 'wenquanyi', 'wqy', 'cjk', 'yahei', 'simhei',
-  'simsun', 'simkai', 'simfang', 'dengxian', 'ming', 'gothic', 'songti', 'heiti',
+/**
+ * 中文语言后缀正则：CJK 家族名（Noto / CJK / Source Han / 思源）后紧跟
+ * sc/cn/tc（简中/繁中语言代码），如 NotoSansSC / SourceHanSansCN / Noto Sans CJK SC。
+ * 要求紧邻家族 token，避免把 'SC'（Small Caps）等无关后缀误当中文。
+ */
+const ZH_LANG_SUFFIX_RE = /(?:noto|cjk|source\s?han|思源)[a-z\s-]*?(sc|cn|tc)(?=[^a-z]|$)/i
+
+/** 日文专属字体标记：命中且无中文强标记时判定为「非中文 CJK」，避免日文字体混入简中候选。 */
+const JP_FONT_HINTS = [
+  'jp', 'japanese', 'mincho', 'gothic', 'kozgo', 'vlgothic',
+  'hiragino', 'meiryo', 'msgothic', 'msmincho', 'ipa', 'rounded', 'maru',
 ]
+
+/** 通用 CJK 家族标记（Noto / CJK / Source Han 系）：无日文标记时兜底视为 CJK。 */
+const GENERAL_CJK_HINTS = ['noto', 'cjk', 'source han']
 
 /** 有再分发风险的 Windows 专有/受限字体文件名片段。 */
 export const RISKY_FONT_HINTS = [
@@ -61,15 +72,19 @@ export function sanitizeStem(filename: string): string {
   return `font-${createHash('sha256').update(noExt).digest('hex').slice(0, 10)}`
 }
 
-/** 判断字体是否覆盖 CJK（文件名 hint 优先，元数据兜底）。 */
-export function isCjkFont(filename: string, meta?: FontMeta | null): boolean {
+/**
+ * 判断字体是否覆盖中文 CJK（文件名/家族启发式，简中优先）：
+ * 1) 中文强标记（wqy/思源/雅黑/黑体…）或 CJK 家族 + sc/cn/tc 语言后缀 → 中文 CJK；
+ * 2) 日文专属标记（Noto Sans JP / VL Gothic / KozGo / MS Gothic / Meiryo…）→ 排除；
+ * 3) 通用 CJK 家族（Noto / Noto CJK / Source Han 无语言后缀）→ 兜底视为 CJK。
+ */
+export function isCjkFont(filename: string, meta?: Pick<FontMeta, 'family' | 'fullName'> | null): boolean {
   const lower = filename.toLowerCase()
-  if (CJK_FONT_HINTS.some((h) => lower.includes(h))) return true
-  if (meta) {
-    const hay = `${meta.family} ${meta.fullName}`.toLowerCase()
-    if (CJK_NAME_HINTS.some((h) => hay.includes(h))) return true
-  }
-  return false
+  const hay = meta ? `${meta.family} ${meta.fullName}`.toLowerCase() : ''
+  if (ZH_FONT_HINTS.some((h) => lower.includes(h) || hay.includes(h))) return true
+  if (ZH_LANG_SUFFIX_RE.test(`${lower} ${hay}`)) return true
+  if (JP_FONT_HINTS.some((h) => lower.includes(h) || hay.includes(h))) return false
+  return GENERAL_CJK_HINTS.some((h) => lower.includes(h) || hay.includes(h))
 }
 
 /** 判断字体文件是否有再分发风险。 */

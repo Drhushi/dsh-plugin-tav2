@@ -44,6 +44,7 @@ export function statusMeta(_args: unknown, value: unknown): JsonValue {
     lockedTerms: number(status.lockedTerms),
     pendingTerms: number(status.pendingTerms),
     worldbookEntries: number(status.worldbookEntries),
+    worldbookProposed: number(status.worldbookProposed),
     pendingApprovals: number(status.pendingApprovals),
     complianceStatus: string(status.complianceStatus),
     complianceAuthorized: boolean(status.complianceAuthorized),
@@ -142,11 +143,11 @@ export function termsMeta(_args: unknown, value: unknown): JsonValue {
   }
 }
 
-/** tav2_worldbook 投影：条目/常驻/引用/覆盖率/告警。 */
+/** tav2_worldbook 投影：条目/提名统计/覆盖率/告警。 */
 export function worldbookMeta(_args: unknown, value: unknown): JsonValue {
   const result = record(value)
   const worldbook = record(result.worldbook)
-  const terms = record(worldbook.terms)
+  const nominations = record(worldbook.nominations)
   return {
     ok: boolean(result.ok),
     entries: number(worldbook.entries),
@@ -154,15 +155,13 @@ export function worldbookMeta(_args: unknown, value: unknown): JsonValue {
     filesReferenced: number(worldbook.filesReferenced),
     fileCoverage: number(worldbook.fileCoverage),
     warnings: stringArray(worldbook.warnings),
-    terms: {
-      total: number(terms.total),
-      processed: number(terms.processed),
-      skipped: number(terms.skipped),
-      proposed: number(terms.proposed),
-      noinfo: number(terms.noinfo),
-      error: number(terms.error),
-      errors: stringArray(terms.errors),
-      unmatched: stringArray(terms.unmatched),
+    nominations: {
+      total: number(nominations.total),
+      recommended: number(nominations.recommended),
+      sedimented: number(nominations.sedimented),
+      accepted: number(nominations.accepted),
+      dismissed: number(nominations.dismissed),
+      errors: stringArray(nominations.errors),
     },
   }
 }

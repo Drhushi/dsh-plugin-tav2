@@ -33,6 +33,12 @@ def main() -> int:
     archive_dir = os.path.dirname(os.path.realpath(archive))
     config.searchpath = [archive_dir]
     config.basedir = os.path.dirname(archive_dir)
+    # config.archives 只在真实游戏启动时由 main.py early_init 扫描 searchpath 填充；
+    # 独立脚本必须自己补上。8.3.x 及更早的 index_archives() 只遍历 config.archives，
+    # 空列表会直接空转（还有 old_config_archives 守卫 early-return）；8.5.x 起改为
+    # 从 scandirfiles 的 arc_files 自行发现，预先填充同样无害。
+    archive_stem = os.path.splitext(os.path.basename(archive))[0]
+    config.archives.append(archive_stem)
     loader.scandirfiles()
     loader.index_archives()
 

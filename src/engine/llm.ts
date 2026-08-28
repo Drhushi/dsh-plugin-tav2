@@ -8,6 +8,13 @@ export interface EngineMessage {
   content: string
 }
 
+export interface GenerateMeta {
+  /** 调用阶段：understanding | rewrite | polish | summary | … */
+  stage: string
+  sceneId?: string
+  round?: number
+}
+
 export interface GenerateRequest {
   /** 系统提示（对应 provider 的 system 槽） */
   system?: string
@@ -17,6 +24,8 @@ export interface GenerateRequest {
   reasoningEffort?: string
   model?: string
   signal?: AbortSignal
+  /** 请求录制元信息（请求快照审计用；不传则快照 stage 为空）。 */
+  meta?: GenerateMeta
 }
 
 export interface GenerateResult {

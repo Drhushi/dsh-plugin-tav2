@@ -123,7 +123,7 @@ export function runTsReport(config: Config): Tav2ReportResult {
       ? Math.round((coverage.translated / coverage.units) * 100)
       : 0
 
-    // G0 格式校验仅 renpy 引擎可用；失败或不可用则省略该字段（不阻断报表）。
+    // G0 格式校验当前仅 Ren'Py 适配器可用；失败或不可用则省略该字段（不阻断报表）。
     let g0: ReportRisks['g0']
     if (engineCfg.engine === 'renpy' && engineCfg.gameDir) {
       try {
@@ -179,7 +179,7 @@ export function runTsReport(config: Config): Tav2ReportResult {
     }
 
     const g0Label = g0 === undefined
-      ? '不可用（仅 renpy 引擎）'
+      ? '不可用（当前适配器仅 renpy）'
       : `缺失块 ${g0.missingBlocks} / 标签违规 ${g0.tagViolations}`
     // S3：0 提取单元 ≠ 正常——明确标「未初始化」，避免被误读为「全绿」。
     const uninitialized = coverage.units === 0

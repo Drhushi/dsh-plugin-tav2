@@ -107,7 +107,12 @@ export function readMode(statePath: string): boolean {
   return readState(statePath).mode
 }
 
-/** 自动识别开关：默认关（fail-closed，与 readMode/readState 一致）；仅显式 mode=true 才开。 */
+/**
+ * 兼容读法：返回 state.json 的 mode 字段（默认关，fail-closed）。
+ * 「自动识别开关」已随去开关重构移除——翻译工具安装改为按工作区自动分级
+ * （游戏区全套 / 普通区引导包，见 translation_scope.applyTranslationScope），
+ * mode 字段保留仅供兼容读取，不再作为安装门控。
+ */
 export function readAutoDetect(statePath: string): boolean {
   try {
     const raw = readFileSync(statePath, 'utf8')

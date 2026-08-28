@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,54 @@ NONSTANDARD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("extend", re.compile(r"^\s*extend\b")),
     ("nvl block", re.compile(r"^\s*nvl\s*:")),
 )
+
+# Python 字符串字面量的正则替身（三双/三单/双/单引号，转义感知），供裸字面量扫描复用
+_STRING_LIT_ALT = (
+    r'\"\"\"(?:\\.|[^\\])*?\"\"\"'
+    r'|'
+    r"'''(?:\\.|[^\\])*?'''"
+    r'|'
+    r'"(?:\\.|[^\\])*"'
+    r'|'
+    r"'(?:\\.|[^\\])*'"
+)
+
+# renpy.input 提示词（裸字符串/包裹形态首参；官方模板不提取、玩家必见 → 与菜单选项同为必补）
+INPUT_PROMPT_RE = re.compile(
+    r"\brenpy\.input\s*\(\s*(?:(?:__|_)\s*\(\s*|prompt\s*=\s*)?(" + _STRING_LIT_ALT + r")"
+)
+
+
+def scan_input_prompts(game_dir: Path) -> list[StringUnit]:
+    """扫描 renpy.input 提示词字面量（变量/表达式形态无法静态提取，不在结果中）。"""
+
+    prompts: list[StringUnit] = []
+    seen: set[str] = set()
+    for path in sorted(game_dir.rglob("*.rpy")):
+        if "tl" in path.relative_to(game_dir).parts:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(content.split("\n"), start=1):
+            for m in INPUT_PROMPT_RE.finditer(line):
+                try:
+                    value = ast.literal_eval(m.group(1))
+                except Exception:
+                    continue
+                if not isinstance(value, str) or not value or value in seen:
+                    continue
+                seen.add(value)
+                prompts.append(
+                    StringUnit(
+                        old=value,
+                        new="",
+                        filename=path.relative_to(game_dir).as_posix(),
+                        linenumber=lineno,
+                    )
+                )
+    return prompts
 
 
 def _parse_source(game_dir: Path):
@@ -180,6 +229,7 @@ def template_integrity(
     patch_strings: bool = False,
     audit_limit: int = 200,
     runtime_ids: set[str] | None = None,
+    source_dir: Path | None = None,
 ) -> dict[str, Any]:
     """源码 vs 模板完整性报告；patch=True 时把缺失对话/选项补入 tl 模板。
 
@@ -187,12 +237,16 @@ def template_integrity(
     「必须补入」= 运行时缺失（runtime - template）且源码解析能提供内容的块；
     replica 解析出的伪标识符（源码有、运行时无）仅记录，不补入，避免成本膨胀。
     未提供 runtime_ids（散装/无 lint）时退回源码-vs-模板口径。
+
+    source_dir：反编译源码所在 game 目录（编译版：tl 落真实游戏目录、源码在
+    tav2_src，二者分离时传入；缺省=与 tl 同目录，即散装源码游戏）。
     """
 
     game_dir = Path(game_dir)
+    source = Path(source_dir) if source_dir else game_dir
     tl_dir = game_dir / "tl" / lang
 
-    source_units, skipped, menu_choices = _parse_source(game_dir)
+    source_units, skipped, menu_choices = _parse_source(source)
     source_ids = {u.identifier for u in source_units}
     template_ids = _dialogue_ids(tl_dir, lang)
     by_id = {u.identifier: u for u in source_units}
@@ -216,24 +270,42 @@ def template_integrity(
             tl_dir, lang, source_units, patchable
         )
 
-    # 字符串层：菜单选项必补（用户可见），其余 _()/_p() 默认审计、可配置开启补入
-    scan_strings = scan_fallback_strings(game_dir)
+    # 字符串层：菜单选项与 renpy.input 提示词必补（用户可见），其余 _()/_p() 默认审计、可配置开启补入
+    scan_strings = scan_fallback_strings(source)
     choices: list[StringUnit] = [
         StringUnit(old=text, new="", filename=file, linenumber=line)
         for file, line, text in menu_choices
     ]
+    input_prompts = scan_input_prompts(source)
     template_olds = _template_string_olds(tl_dir, lang)
     choice_olds = {c.old for c in choices}
+    prompt_olds = {p.old for p in input_prompts}
     missing_choices = sorted(choice_olds - template_olds)
-    other_olds = {s.old for s in scan_strings} - template_olds - choice_olds
+    missing_prompts = sorted(prompt_olds - template_olds - choice_olds)
+    other_olds = {s.old for s in scan_strings} - template_olds - choice_olds - prompt_olds
     added_strings: list[str] = []
-    if patch and (patch_strings or missing_choices):
+    if patch and (patch_strings or missing_choices or missing_prompts):
         patchable = [c for c in choices if c.old in missing_choices]
+        patchable += [p for p in input_prompts if p.old in missing_prompts]
         if patch_strings:
             patchable += [s for s in scan_strings if s.old in other_olds]
         if patchable:
             _append_string_pairs(tl_dir, lang, patchable)
             added_strings = [u.old for u in patchable]
+
+    # 零提取脚本上报（S19 教训：整份小脚本被跳过时无人知晓）
+    covered_files = (
+        {u.filename for u in source_units}
+        | {file for file, _, _ in menu_choices}
+        | {s.filename for s in scan_strings}
+        | {p.filename for p in input_prompts}
+    )
+    all_source_files = {
+        p.relative_to(source).as_posix()
+        for p in source.rglob("*.rpy")
+        if "tl" not in p.relative_to(source).parts
+    }
+    zero_extract_files = sorted(all_source_files - covered_files)
 
     source_n = len(source_units)
     template_n = len(template_ids)
@@ -248,12 +320,16 @@ def template_integrity(
         "added_from_source": added_dialogue,
         "patched_files": patched_files,
         "extra_in_template": extra,
-        "missing_strings": len(missing_choices) + len(other_olds),
+        "missing_strings": len(missing_choices) + len(missing_prompts) + len(other_olds),
         "missing_choice_strings": len(missing_choices),
         "missing_choice_samples": missing_choices[:20],
+        "missing_input_prompts": len(missing_prompts),
+        "missing_input_prompt_samples": missing_prompts[:20],
         "missing_other_strings": len(other_olds),
         "added_strings": len(added_strings),
+        "zero_extract_files": zero_extract_files[:audit_limit],
+        "zero_extract_file_count": len(zero_extract_files),
         "skipped_source_statements": len(skipped),
         "skipped_samples": skipped[:audit_limit],
-        "nonstandard": _audit_nonstandard(game_dir, audit_limit),
+        "nonstandard": _audit_nonstandard(source, audit_limit),
     }

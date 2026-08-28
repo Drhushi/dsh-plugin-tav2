@@ -35,7 +35,7 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     p_prepare.add_argument(
         "--work",
         default=None,
-        help="工作根目录（默认 <工程根>/work；编译版解包/反编译/staging 产物所在）",
+        help="反编译源码参考目录的父目录（默认 <游戏根>/tav2_src；显式指定时用旧暂存区语义 <work>/<游戏名>_prep）",
     )
     p_wb = sub.add_parser("worldbook", help="生成世界书条目")
     p_wb.add_argument("--force", action="store_true", help="覆盖已生成条目")
@@ -52,6 +52,7 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     sub.add_parser("check", help="一致性审计与回填校验")
     p_bf = sub.add_parser("backfill", help="从审校表回填")
     p_bf.add_argument("--review-file", required=True, help="审校表 xlsx 路径")
+    p_bf.add_argument("--force", action="store_true", help="忽略审校状态，强制按人工/机器译文回填")
     p_dp = sub.add_parser("deploy", help="把 tl/<lang> 拷到目标游戏目录")
     p_dp.add_argument("--target", required=True, help="原版游戏根目录")
     p_ap = sub.add_parser("approvals", help="审批队列管理")
@@ -253,8 +254,9 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
 
     adapter = get_adapter(cfg)
     rows = read_review_sheet(Path(args.review_file))
-    applied_rows = list(iter_applied_rows(rows))
-    stats = backfill_review(adapter.game_dir, adapter.lang, rows)
+    force = bool(getattr(args, "force", False))
+    applied_rows = list(iter_applied_rows(rows, force))
+    stats = backfill_review(adapter.game_dir, adapter.lang, rows, force)
     if applied_rows:
         from tav2.translate import unit_context_fp
 
@@ -263,7 +265,14 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
         scene_by_unit = {
             u.unit_id: scene for scene in document.scenes for u in scene.units
         }
+        # 回填即人工定论：同步清掉对应单元的 translation_failed 待审批，避免审校队列卡住。
+        failed_approvals = {
+            str((a.get("payload") or {}).get("source") or ""): int(a.get("id") or 0)
+            for a in db.pending_approvals()
+            if a.get("kind") == "translation_failed"
+        }
         synced = 0
+        cleared = 0
         for row in applied_rows:
             unit = _match_review_unit(row, meta)
             if unit is None:
@@ -272,6 +281,9 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
             if not translation:
                 continue
             db.set_unit_status(unit.unit_id, "translated")
+            approval_id = failed_approvals.get(unit.unit_id)
+            if approval_id and db.decide_approval(approval_id, "approved"):
+                cleared += 1
             fp = (
                 unit_context_fp(unit, scene_by_unit[unit.unit_id])
                 if unit.unit_id in scene_by_unit
@@ -280,7 +292,16 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
             db.tm_put(unit.source, unit.unit_id, translation, fp)
             synced += 1
         stats["db_synced"] = synced
+        if cleared:
+            stats["approvals_cleared"] = cleared
     print(json.dumps(stats, ensure_ascii=False, indent=2))
+    # 拒绝静默 no-op：一行都没回填时必须把原因说明白，不再只报 completed。
+    if stats["applied"] == 0 and stats.get("skipped", 0) > 0:
+        reasons = stats.get("skip_reasons") or {}
+        detail = "；".join(f"{k}×{v}" for k, v in reasons.items()) or "未知原因"
+        print(f"⚠️ 没有任何行被回填（跳过 {stats['skipped']} 条：{detail}）。")
+        print("回填条件：状态=已确认/已修改 且 译文非空；或加 --force 强制按机器译文回填。")
+        return 1
     return 0
 
 

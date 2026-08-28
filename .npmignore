@@ -3,3 +3,6 @@
 # 导致发布包缺失全部构建产物）。files 白名单里已有 dist/scripts 等，这里只补排除。
 node_modules/
 *.tsbuildinfo
+# Python 运行缓存（python/tav2 内也会生成，files 白名单拦不住）
+__pycache__/
+*.pyc

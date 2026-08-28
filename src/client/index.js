@@ -14,6 +14,7 @@
  */
 import React from 'react'
 import { parseJobDetail } from './projection.js'
+import { WorkspacePanel } from './workspacePanel.js'
 
 const CARD_STYLE = {
   border: '1px solid rgba(127, 127, 127, 0.35)',
@@ -166,8 +167,8 @@ function StatusCard({ block }) {
       { label: '待译', value: `${meta.pendingUnits ?? 0}` },
       { label: '锁定术语', value: `${meta.lockedTerms ?? 0}` },
       { label: '待决术语', value: `${meta.pendingTerms ?? 0}` },
-      { label: '世界书', value: `${meta.worldbookEntries ?? 0}` },
-      { label: '待审批', value: `${meta.pendingApprovals ?? 0}` },
+      { label: '世界书', value: `${meta.worldbookEntries ?? 0}（待确认 ${meta.worldbookProposed ?? 0}）` },
+      { label: '写操作待审批', value: `${meta.pendingApprovals ?? 0}` },
     ] }),
     meta.summary ? h('div', { style: NOTE_STYLE }, meta.summary) : null,
     h(ErrorNote, { block }),
@@ -281,7 +282,7 @@ const JOB_STATUS_LABEL = {
   running: '运行中', stopping: '停止中', completed: '已完成',
   failed: '失败', killed: '已终止',
 }
-/** apply 时捕获的连接 api（设置卡读/写翻译模式用）。 */
+/** apply 时捕获的连接 api（设置卡读/写翻译渠道、Ren'Py SDK 路径等用）。 */
 let connectionApi = null
 
 const MODE_NS = 'tav2'
@@ -624,6 +625,13 @@ export function apply(ctx) {
   register('tav2_prepare', JobCard)
   register('tav2_translate_batch', JobCard)
   register('tav2_review_backfill', JobCard)
+
+  // 「翻译」标签页（conversation.view，id=tav2.workspace）：会话级视图标签环新增
+  // 一页，所有会话都出现；普通会话显示「未初始化翻译项目」占位，只读，无写操作。
+  ctx.slots.inject('conversation.view', () => ctx.slots.register(
+    { name: 'conversation.view', id: 'tav2.workspace', order: 10, label: '翻译' },
+    WorkspacePanel,
+  ))
 
   // /tav2-mode 命令不注册自定义 commandview：宿主对未注册命令自动渲染
   // GenericCommandCard（状态点 + 可展开结果），与所有命令一致。

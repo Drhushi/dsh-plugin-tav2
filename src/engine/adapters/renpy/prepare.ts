@@ -11,7 +11,7 @@
  */
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { scanFallbackStrings, writeFallbackTemplates } from './templates'
+import { scanFallbackStrings, writeFallbackTemplates, type TemplateMergeStats } from './templates'
 import type { DialogueUnit } from './models'
 
 /** 对话解析器签名（与 fallbackParser.parseDialogueUnits 一致）。 */
@@ -27,6 +27,8 @@ export interface TsPrepareResult {
   templateFiles: string[]
   dialogueUnits: number
   stringUnits: number
+  /** 幂等合并统计（重跑 prepare / 游戏自带 tl 时非空）：保留的已有已译块 / 追加的缺失块。 */
+  merged?: { preservedBlocks: number; addedBlocks: number }
 }
 
 /**
@@ -54,10 +56,15 @@ export function prepareTemplates(
   const parseRoot = opts.parseDir ?? writeRoot
   const units = parseDialogue(parseRoot)
   const strings = scanFallbackStrings(parseRoot)
-  const templateFiles = writeFallbackTemplates(writeRoot, lang, units, strings)
+  const stats: TemplateMergeStats = { preservedBlocks: 0, addedBlocks: 0 }
+  const templateFiles = writeFallbackTemplates(writeRoot, lang, units, strings, stats)
   return {
     templateFiles,
     dialogueUnits: units.length,
     stringUnits: strings.length,
+    // 首次生成无保留块（preservedBlocks=0）时不带 merged；有合并时给出统计。
+    merged: stats.preservedBlocks > 0
+      ? { preservedBlocks: stats.preservedBlocks, addedBlocks: stats.addedBlocks }
+      : undefined,
   }
 }

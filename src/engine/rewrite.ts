@@ -1,14 +1,37 @@
 /** 双阶段协议第二步：据理解记录与记忆逐条重写，含完整性/标签硬校验与补译。 */
 
 import type { EngineConfig } from './config'
-import { ensureTranslationTag, stripLeadingSpeakerTag, tagsPreserved } from './gates'
+import { applyAntiCliche, ensureTranslationTag, stripLeadingSpeakerTag, tagsPreserved } from './gates'
 import type { Generate } from './llm'
 import { extractJson } from './llm'
 import type { MemoryPack } from './memory'
 import type { Scene, UnderstandingRecord, Unit } from './models'
-import { langLabel, rewritePrompt, styleInstruction } from './prompts'
+import { antiClichePrompt, langLabel, rewritePrompt, styleInstruction } from './prompts'
 
 export const MAX_RETRY_ROUNDS = 3
+
+/**
+ * 行格式兜底解析：模型偶发不回 JSON，而是按「unit_id: 译文」逐行作答
+ * （值里含 {color=…} 等伪花括号时 extractJson 会被带偏，且这类失败是确定性的，
+ * 重试多少轮都一样）。按已知 unit_id 精确匹配行首（id 可能含冒号，如 S:<hash>），
+ * 值取到下一个已知 id 行或文末；救不回返回空对象，调用方照常进重试。
+ */
+export function parseLineTranslations(text: string, ids: string[]): Record<string, string> {
+  if (ids.length === 0) return {}
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const alt = [...ids].sort((a, b) => b.length - a.length).map(esc).join('|')
+  // 值的终点 = 下一行已知 id 行首，或文末（(?![\s\S]) 是 JS 的 $ 等价无歧义写法）。
+  const re = new RegExp(
+    `^[ \\t]*(${alt})[ \\t]*[:：][ \\t]*([\\s\\S]*?)(?=^[ \\t]*(?:${alt})[ \\t]*[:：]|(?![\\s\\S]))`,
+    'gm',
+  )
+  const result: Record<string, string> = {}
+  for (const m of text.matchAll(re)) {
+    const value = (m[2] ?? '').trim()
+    if (value) result[m[1]!] = value
+  }
+  return result
+}
 
 export interface RewriteFailureEvent {
   /** 本轮仍未产出的单元 id。 */
@@ -16,6 +39,11 @@ export interface RewriteFailureEvent {
   reason: string
   /** 第几轮失败（0 起）。 */
   round: number
+}
+
+/** P1 反翻译腔确定性过滤命中事件（供调用方累计统计）。 */
+export interface AntiClicheEvent {
+  hits: Array<{ category: string; word: string }>
 }
 
 /**
@@ -31,22 +59,38 @@ export async function rewriteScene(
   units?: Unit[],
   signal?: AbortSignal,
   onFailure?: (event: RewriteFailureEvent) => void,
+  onAntiCliche?: (event: AntiClicheEvent) => void,
 ): Promise<Record<string, string>> {
   const pending = (units ?? scene.units).filter((u) => u.source)
   const result: Record<string, string> = {}
   for (let round = 0; round <= MAX_RETRY_ROUNDS; round += 1) {
     const missing = pending.filter((u) => !(u.unit_id in result))
     if (missing.length === 0) break
-    const prompt = rewritePrompt(langLabel(cfg.lang), styleInstruction(cfg.translation.stylePreset, cfg.translation.stylePrompt, cfg.translation.head))
+    const antiCliche = cfg.translation.antiCliche.enabled
+      ? antiClichePrompt(cfg.translation.antiCliche.categories)
+      : ''
+    const prompt = rewritePrompt(
+      langLabel(cfg.lang),
+      styleInstruction(cfg.translation.stylePreset, cfg.translation.stylePrompt, cfg.translation.head),
+      antiCliche,
+    )
     const user = userMessage(scene, missing, memory, understanding, round, cfg)
     let data: Record<string, unknown>
     try {
       const response = await generate.generate({
         system: prompt,
         messages: [{ role: 'user', content: user }],
+        meta: { stage: 'rewrite', sceneId: scene.scene_id, round },
         ...(signal ? { signal } : {}),
       })
-      data = extractJson(response.text)
+      try {
+        data = extractJson(response.text)
+      } catch (jsonErr) {
+        // 行格式兜底：救回「unit_id: 译文」逐行作答；一条都救不回才算本轮失败。
+        const salvaged = parseLineTranslations(response.text, missing.map((u) => u.unit_id))
+        if (Object.keys(salvaged).length === 0) throw jsonErr
+        data = salvaged
+      }
     } catch (err) {
       onFailure?.({
         unitIds: missing.map((u) => u.unit_id),
@@ -63,7 +107,17 @@ export async function rewriteScene(
       const srcText = sources[unitId]
       if (!text || srcText === undefined) continue
       if (!tagsPreserved(srcText, text)) continue
-      result[unitId] = stripLeadingSpeakerTag(srcText, ensureTranslationTag(srcText, text))
+      let final = stripLeadingSpeakerTag(srcText, ensureTranslationTag(srcText, text))
+      // P1 反翻译腔确定性后过滤：仅源文无对应词时报告/移除；autoFix 缺省 false（只报告不改）。
+      if (cfg.translation.antiCliche.enabled) {
+        const r = applyAntiCliche(srcText, final, {
+          categories: cfg.translation.antiCliche.categories,
+          autoFix: cfg.translation.antiCliche.autoFix,
+        })
+        if (r.applied.length > 0) onAntiCliche?.({ hits: r.applied })
+        final = r.text
+      }
+      result[unitId] = final
     }
   }
   return result
@@ -147,6 +201,7 @@ function sceneContextText(scene: Scene, units: Unit[], cfg: EngineConfig): strin
 
 function understandingText(record: UnderstandingRecord): string {
   const lines: string[] = []
+  if (record.tone) lines.push(`场景文风：${record.tone}`)
   if (Object.keys(record.scene_state).length) {
     lines.push('场景状态：' + Object.entries(record.scene_state).map(([k, v]) => `${k}: ${v}`).join('；'))
   }

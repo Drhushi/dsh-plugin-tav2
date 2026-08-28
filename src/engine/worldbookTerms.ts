@@ -143,6 +143,8 @@ export interface GenerateByTermsOptions {
   cfg: EngineConfig
   lines: string[]
   seeds: WorldbookSeed[]
+  /** 名字 → 额外背景线索（理解沉淀提名的 hint/场景摘录），拼在窗口上下文之后。 */
+  extraContext?: Map<string, string>
   onProgress?: (done: number, total: number) => void
 }
 
@@ -182,10 +184,11 @@ export async function generateWorldbookByTerms(
       .map((s) => {
         const ctx = contextMap.get(s.source) ?? []
         const head = `【名字: ${s.source}】` + (s.lockedTarget ? `（锁定译名: ${s.lockedTarget}）` : '')
-        const body = ctx.length > 0
+        const windows = ctx.length > 0
           ? ctx.map((w) => w.text).join('\n')
           : '（原文中未找到该名字，无上下文）'
-        return `${head}\n${body}`
+        const extra = opts.extraContext?.get(s.source)?.trim()
+        return `${head}\n${windows}${extra ? `\n${extra}` : ''}`
       })
       .join('\n\n')
     const lockedList = group.filter((s) => s.lockedTarget)

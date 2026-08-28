@@ -9,13 +9,15 @@
  * - 非侵入契约：只新增 config.yaml，不改/覆盖任何游戏文件。
  */
 import { existsSync, readdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
 import { approvalDenialText, requestApproval } from '../core/approval'
 import type { Tav2ToolResult } from '../core/types'
-import { detectEngine } from '../engine/adapters'
+import { detectEngine, renpyAdapter } from '../engine/adapters'
+import { assertSupportedEngine, loadEngineConfig, resolveProjectDbPath } from '../engine/config'
+import { ProjectDB } from '../engine/db'
 import { upgradeAgentScopeToFull } from '../translation_scope'
 
 export interface Tav2InitResult extends Tav2ToolResult {
@@ -58,9 +60,23 @@ export function buildInitConfigYaml(gameDir: string): string {
   ].join('\n')
 }
 
+/**
+ * 把用户输入的 game_dir 解析为可探测路径：
+ * - 相对路径按会话工作区（agent cwd）解析为绝对路径（端用户习惯说相对路径）；
+ * - 绝对路径 / 空值原样返回；无 baseCwd 时保持原样（回退进程 cwd 旧行为）。
+ */
+export function resolveInitTarget(target: string | undefined, baseCwd?: string): string | undefined {
+  const t = (target ?? '').trim()
+  if (!t) return undefined
+  if (isAbsolute(t)) return t
+  if (baseCwd && baseCwd.trim()) return join(baseCwd.trim(), t)
+  return target
+}
+
 /** 探测 + 就绪检查（只读，不写盘）。 */
-export function runTsInit(config: Config, target?: string): Tav2InitResult {
-  const root = (target && target.trim()) || (config.gameDirOverride || config.projectDir || '').trim()
+export function runTsInit(config: Config, target?: string, baseCwd?: string): Tav2InitResult {
+  const root = (resolveInitTarget(target, baseCwd) ?? '').trim()
+    || (config.gameDirOverride || config.projectDir || '').trim()
   if (!root) {
     return {
       ok: false,
@@ -162,6 +178,50 @@ export function runTsInitWrite(configPath: string): Tav2InitResult {
   }
 }
 
+/** 摄入同步结果（tav2_init 完成后附带）。 */
+export interface SyncExistingResult {
+  ok: boolean
+  /** 本次摄入（新增）的单元数。 */
+  imported: number
+  /** 文档中带已有 tl 译文（extra.translated）的单元数。 */
+  translated: number
+  /** 面向用户的说明文本（摄入失败时也返回，不抛异常）。 */
+  text: string
+}
+
+/**
+ * 从「游戏目录里已有的 tl 译文」摄入已译状态到项目 DB（初始化后自动调用）。
+ * - 幂等：syncUnits 按 unit_id INSERT OR IGNORE，不覆盖已有状态；
+ * - 失败不崩溃：无 config / 非 renpy / 提取失败一律返回 ok=false、摄入 0。
+ */
+export function syncExistingTranslations(configPath: string): SyncExistingResult {
+  try {
+    const engineCfg = loadEngineConfig(configPath, dirname(configPath))
+    assertSupportedEngine(engineCfg)
+    if (!engineCfg.gameDir) {
+      return { ok: false, imported: 0, translated: 0, text: '未配置 game_dir，跳过已有译文摄入。' }
+    }
+    const extracted = renpyAdapter.extract(engineCfg.gameDir, { lang: engineCfg.lang })
+    const document = extracted.document
+    const db = new ProjectDB(resolveProjectDbPath(engineCfg, configPath, dirname(configPath)))
+    try {
+      const imported = db.syncUnits(document)
+      const translated = document.allUnits().filter((u) => u.extra && u.extra.translated).length
+      return {
+        ok: true,
+        imported,
+        translated,
+        text: `已摄入 ${imported} 条单元（其中 ${translated} 条已译，源自已有 tl/${engineCfg.lang} 译文）。`,
+      }
+    } finally {
+      db.close()
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    return { ok: false, imported: 0, translated: 0, text: `已有译文摄入失败（不影响初始化）：${detail}` }
+  }
+}
+
 export function registerInitTool(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'tav2_init',
@@ -194,30 +254,45 @@ export function registerInitTool(ctx: Context, config: Config): void {
     },
     async execute(args, exec) {
       const gameDir = typeof args.game_dir === 'string' ? args.game_dir : undefined
-      const res = runTsInit(config, gameDir)
-      if (!res.needsWrite) return res
-      const decision = await requestApproval(ctx, exec, res.preview ?? '确认初始化翻译项目？')
-      if (decision !== 'allowed') {
-        return {
-          ok: false,
-          command: 'tav2_init',
-          timedOut: false,
-          text: `${approvalDenialText(decision)}：未写入 config.yaml。`,
+      // 会话工作区（agent cwd）：相对 game_dir 按它解析，端用户说相对路径不再报「目录不存在」。
+      const cwd = (exec.agent as { session?: { header?: { cwd?: string } } } | null | undefined)
+        ?.session?.header?.cwd
+      const res = runTsInit(config, gameDir, cwd)
+      let final: Tav2InitResult
+      if (res.needsWrite) {
+        const decision = await requestApproval(ctx, exec, res.preview ?? '确认初始化翻译项目？')
+        if (decision !== 'allowed') {
+          return {
+            ok: false,
+            command: 'tav2_init',
+            timedOut: false,
+            text: `${approvalDenialText(decision)}：未写入 config.yaml。`,
+          }
+        }
+        const written = runTsInitWrite(res.configPath as string)
+        if (written.ok && res.configPath) {
+          // 本会话指向新生成的 config.yaml，并升级为全套翻译作用域。
+          config.projectDir = dirname(res.configPath)
+          config.engineConfigPath = ''
+          config.gameDirOverride = undefined
+          try {
+            upgradeAgentScopeToFull(exec, config)
+          } catch (err) {
+            console.warn('[dsh-plugin-tav2] tav2_init 升级作用域失败：', err)
+          }
+        }
+        final = written
+      } else {
+        final = res
+      }
+      // 初始化后摄入已有 tl 译文状态（新写与「已就绪」重跑均执行；幂等、失败不阻塞）。
+      if (final.ok && final.configPath) {
+        const sync = syncExistingTranslations(final.configPath)
+        if (sync.imported > 0) {
+          final = { ...final, text: `${final.text}\n${sync.text}` }
         }
       }
-      const written = runTsInitWrite(res.configPath as string)
-      if (written.ok && res.configPath) {
-        // 本会话指向新生成的 config.yaml，并升级为全套翻译作用域。
-        config.projectDir = dirname(res.configPath)
-        config.engineConfigPath = ''
-        config.gameDirOverride = undefined
-        try {
-          upgradeAgentScopeToFull(exec, config)
-        } catch (err) {
-          console.warn('[dsh-plugin-tav2] tav2_init 升级作用域失败：', err)
-        }
-      }
-      return written
+      return final
     },
   }))
 }

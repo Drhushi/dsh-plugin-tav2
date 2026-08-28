@@ -12,6 +12,8 @@ const HEADER_RE = /^translate\s+(\S+)\s+([^:]+):$/
 
 const NON_SAY_PREFIXES = [
   'voice', 'nvl', 'pass', 'if ', 'else', 'elif', '$', 'python', 'call', 'jump',
+  // old/new 只属于 strings 块；混进对话块（如旧版把游戏自带 translate 块写进模板）时不按 say 解析
+  'old ', 'new ',
 ]
 
 // 复刻 fallback_parser 的正则：r?"..." | r?'...' | r?`...`
@@ -102,9 +104,15 @@ export function parseSayLine(text: string, indent = ''): SayLine | null {
     let inTemp = false
     while (idx < tokens.length && tokens[idx]![0] !== 'STR') {
       const [kind, value] = tokens[idx]!
-      if (kind === 'PUNCT' && value === '@') {
+      if (kind === 'PUNCT') {
+        // say 的 who/属性区只有词与 @；出现括号等标点说明是函数调用等表达式语句
+        // （如死块里回读的 renpy.register_shader(...)），当 say 解析会产出非法说话人单元。
+        if (value !== '@') return null
         inTemp = true
       } else {
+        // say 行的 who/属性位不可能含 =；含 = 的是赋值行（gui.text_font = "..."），
+        // 解析成 say 会产出非法说话人噪声单元（invalid_speakers / 待译队列污染）。
+        if (kind === 'WORD' && value.includes('=')) return null
         ;(inTemp ? temps : attrs).push(value)
       }
       idx += 1

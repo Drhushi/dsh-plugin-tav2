@@ -23,6 +23,23 @@ class RenPyAdapter(EngineAdapter):
     def _gamedir(self) -> Path:
         return self.game_dir / "game" if (self.game_dir / "game").is_dir() else self.game_dir
 
+    def _source_gamedir(self) -> Path:
+        """反编译源码所在 game 目录（编译版 prepare 的源码参考）。
+
+        解析顺序：config source_dir → <游戏根>/tav2_src/game（默认约定）→ 游戏目录自身。
+        散装 .rpy 游戏没有源码参考目录，自然回退到游戏目录自身，行为不变。
+        """
+
+        custom = str(self.cfg.get("source_dir") or "").strip()
+        if custom:
+            p = Path(custom)
+            return p / "game" if (p / "game").is_dir() else p
+        gamedir = self._gamedir()
+        sibling = gamedir.parent / "tav2_src"
+        if sibling.is_dir():
+            return sibling / "game" if (sibling / "game").is_dir() else sibling
+        return gamedir
+
     def _tl_dir(self) -> Path:
         return self._gamedir() / "tl" / self.lang
 
@@ -66,10 +83,13 @@ class RenPyAdapter(EngineAdapter):
     # ------------------------------------------------------------------ extract
 
     def _label_map(self) -> dict[str, str]:
-        """用有限解析器从游戏脚本生成 标识符 -> label 映射（失败返回空）。"""
+        """用有限解析器从游戏脚本生成 标识符 -> label 映射（失败返回空）。
+
+        编译版游戏目录里没有松散 .rpy，自动回退到源码参考目录（tav2_src）解析。
+        """
 
         try:
-            units = RestructurerReplica().parse_game(self._gamedir())
+            units = RestructurerReplica().parse_game(self._source_gamedir())
         except Exception:
             return {}
         return {u.identifier: u.label or "" for u in units}
@@ -155,7 +175,7 @@ class RenPyAdapter(EngineAdapter):
             game_dir=str(self.game_dir),
             lang=self.lang,
             scenes=scenes,
-            extra={"characters": renpy_characters.extract_characters(self.game_dir)},
+            extra={"characters": renpy_characters.extract_characters(self._source_gamedir())},
         )
         return document
 

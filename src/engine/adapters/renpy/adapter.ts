@@ -5,13 +5,14 @@
  * EngineAdapter 接口：detect / extract / inject / diff / coverage。
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { Dirent, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { sourceHash } from '../../db'
 import { Document, Scene, Unit } from '../../models'
 import { backfillMachine } from './backfill'
 import { DialogueUnit, StringUnit } from './models'
 import { parseDialogueUnits } from './fallbackParser'
+import { resolveSourceGameDirs } from './sourceDir'
 import { loadWork, parseTlDirectory, tlRoot } from './tlparser'
 import { verifyRenpy } from './verify'
 import { renpyRuntime } from './runtime'
@@ -28,19 +29,41 @@ import type {
   InjectResult,
 } from '../types'
 
-/** Ren'Py 探测：存在 game/ 且含 .rpy/.rpyc/.rpa，或存在 game/tl/<lang>。 */
+/** 探测时跳过的目录：产物/运行时目录，避免把 tl/ 翻译模板、缓存当源码。 */
+const DETECT_SKIP_DIRS = new Set(['tl', 'cache', 'renpy', '__pycache__'])
+
+/** 递归统计 dir 下 .rpy/.rpyc/.rpa 数量（跳过产物目录；目录不可读静默跳过）。 */
+function countRenpySources(root: string, out: { rpy: number; rpyc: number; rpa: number }): void {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      if (DETECT_SKIP_DIRS.has(e.name)) continue
+      countRenpySources(join(root, e.name), out)
+      continue
+    }
+    if (e.name.endsWith('.rpy')) out.rpy++
+    else if (e.name.endsWith('.rpyc')) out.rpyc++
+    else if (e.name.endsWith('.rpa')) out.rpa++
+  }
+}
+
+/** Ren'Py 探测：存在 game/ 且含 .rpy/.rpyc/.rpa（含深层子目录），或存在 game/tl/<lang>。 */
 export function detectRenpy(gameRoot: string): DetectResult {
   const gameDir = join(gameRoot, 'game')
   const hasGameDir = existsSync(gameDir) && statSync(gameDir).isDirectory()
-  const rootEntries = existsSync(gameRoot) ? readdirSync(gameRoot) : []
-  const gameEntries = hasGameDir ? readdirSync(gameDir) : []
-
-  const rpyCount = (hasGameDir ? gameEntries : rootEntries).filter((f) => f.endsWith('.rpy')).length
-  const rpycCount = (hasGameDir ? gameEntries : rootEntries).filter((f) => f.endsWith('.rpyc')).length
-  const rpaCount = (hasGameDir ? gameEntries : rootEntries).filter((f) => f.endsWith('.rpa')).length
+  // 递归统计源文件（真实游戏脚本常放在 game/script/ 等子目录，不再只认直接子项）。
+  const counts = { rpy: 0, rpyc: 0, rpa: 0 }
+  if (hasGameDir || existsSync(gameRoot)) {
+    countRenpySources(hasGameDir ? gameDir : gameRoot, counts)
+  }
   const tlChinese = hasGameDir && existsSync(join(gameDir, 'tl', 'chinese'))
 
-  const detected = hasGameDir && (rpyCount > 0 || rpycCount > 0 || rpaCount > 0 || tlChinese)
+  const detected = hasGameDir && (counts.rpy > 0 || counts.rpyc > 0 || counts.rpa > 0 || tlChinese)
   const confidence = detected ? (tlChinese ? 1 : 0.8) : 0
   return {
     engine: 'renpy',
@@ -49,13 +72,13 @@ export function detectRenpy(gameRoot: string): DetectResult {
     confidence,
     layout: {
       gameDir: hasGameDir ? gameDir : null,
-      rpyCount,
-      rpycCount,
-      rpaCount,
+      rpyCount: counts.rpy,
+      rpycCount: counts.rpyc,
+      rpaCount: counts.rpa,
       hasTlChinese: Boolean(tlChinese),
     },
     message: detected
-      ? `检测到 Ren'Py 游戏（.rpy=${rpyCount}, .rpyc=${rpycCount}, .rpa=${rpaCount}）`
+      ? `检测到 Ren'Py 游戏（.rpy=${counts.rpy}, .rpyc=${counts.rpyc}, .rpa=${counts.rpa}）`
       : "未检测到 Ren'Py 游戏布局",
   }
 }
@@ -86,14 +109,17 @@ export function extractRenpy(gameRoot: string, options: ExtractOptions = {}): Ex
   const lang = options.lang ?? 'chinese'
   const [, dialogue, strings] = loadWork(gameRoot, lang)
   // 标识符 -> label 映射来自游戏脚本解析（与 Python adapter._label_map 对齐）；
+  // 编译版游戏目录没有松散 .rpy，自动回退到源码参考目录（tav2_src）解析；
   // 脚本缺失或解析失败时退化为按文件分组（noaddr）。
   const labelMap = new Map<string, string>()
-  try {
-    for (const unit of parseDialogueUnits(gameRoot)) {
-      if (unit.label) labelMap.set(unit.identifier, unit.label)
+  for (const dir of [gameRoot, ...resolveSourceGameDirs(gameRoot)]) {
+    try {
+      for (const unit of parseDialogueUnits(dir)) {
+        if (unit.label) labelMap.set(unit.identifier, unit.label)
+      }
+    } catch {
+      // 忽略：退化为 noaddr
     }
-  } catch {
-    // 忽略：退化为 noaddr
   }
   const detectBranch = options.branchDetect ?? true
   const scenes: Scene[] = []

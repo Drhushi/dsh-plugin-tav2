@@ -15,15 +15,12 @@ import type { RuntimeCheck, RuntimeRequirement } from '../engine/adapters'
 import { summarizeRuntime } from '../engine/runtime/summary'
 import { loadEngineConfigFor, resolveProjectDbPath } from '../engine/config'
 import { tlRoot } from '../engine/adapters/renpy/tlparser'
-import { sanitizeStem } from '../engine/fonts/scan'
+import { isCjkFont, sanitizeStem } from '../engine/fonts/scan'
 import { STYLE_OVERRIDE_FILE } from '../engine/fonts/patch'
 import { ProjectDB } from '../engine/db'
 import { tsKnowledgeResult } from './tsKnowledge'
 import { tav2RuntimeModeJsonSchema, tav2RuntimeRequirementsJsonSchema } from './status'
 import { verifyMeta } from '../present/meta'
-
-/** 常见中文字体文件名字片段（存在即视为 CJK 字体就位）。 */
-const CJK_FONT_HINTS = ['noto', 'wqy', 'sourcehan', 'source_han', '思源', 'msyh', 'simhei', 'simsun', 'yahei', 'cjk']
 
 const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc']
 
@@ -57,12 +54,9 @@ function findFontFiles(root: string): string[] {
   }
 }
 
-/** 判断字体文件集合中是否含 CJK 字体（按文件名片段启发式）。 */
+/** 判断字体文件集合中是否含中文 CJK 字体（与 tav2_font 同一启发式）。 */
 function hasCjkFont(files: string[]): boolean {
-  return files.some((name) => {
-    const lower = name.toLowerCase()
-    return CJK_FONT_HINTS.some((hint) => lower.includes(hint))
-  })
+  return files.some((name) => isCjkFont(name))
 }
 
 /** engineBackend=ts：运行验证（仅 Ren'Py）。 */

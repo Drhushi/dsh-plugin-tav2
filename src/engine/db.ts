@@ -56,6 +56,26 @@ CREATE TABLE IF NOT EXISTS worldbook_entries (
     updated_at TEXT
 );
 
+-- 世界书提名（提名制）：候选实体 + 证据 + 三问推荐，用户 accept 后才生成卡片草案。
+CREATE TABLE IF NOT EXISTS worldbook_nominations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'scan',
+    kind TEXT NOT NULL DEFAULT 'lore',
+    frequency INTEGER NOT NULL DEFAULT 0,
+    spread REAL NOT NULL DEFAULT 0,
+    files INTEGER NOT NULL DEFAULT 0,
+    evidence TEXT NOT NULL DEFAULT '[]',
+    scenes TEXT NOT NULL DEFAULT '[]',
+    hint TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    recommended INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'nominated',
+    created_at TEXT,
+    updated_at TEXT,
+    UNIQUE (source)
+);
+
 CREATE TABLE IF NOT EXISTS characters (
     speaker TEXT PRIMARY KEY,
     name_zh TEXT NOT NULL DEFAULT '',
@@ -392,11 +412,14 @@ export class ProjectDB {
     const stmt = this.db.prepare(
       'INSERT OR IGNORE INTO units'
       + '(unit_id, kind, file, scene_id, source_hash, source, markup, speaker, status)'
-      + "VALUES(?,?,?,?,?,?,?,?, 'pending')",
+      + 'VALUES(?,?,?,?,?,?,?,?,?)',
     )
     let count = 0
     for (const scene of document.scenes) {
       for (const unit of scene.units) {
+        // 已有 tl 译文的单元（extra.translated）插入即标 translated，否则 pending；
+        // INSERT OR IGNORE 保证已存在行（含已 translated）不被改回。
+        const status = unit.extra && unit.extra.translated ? 'translated' : 'pending'
         stmt.run(
           unit.unit_id,
           unit.kind,
@@ -406,11 +429,32 @@ export class ProjectDB {
           unit.source,
           unit.markup,
           unit.speaker,
+          status,
         )
         count += 1
       }
     }
+    this.pruneMissingPendingUnits(document)
     return count
+  }
+
+  /**
+   * 清理已不在当前提取结果里的 pending 单元（历史噪声自愈）。
+   * 提取是全量口径（tl 目录整读，失败即抛错不会走到这里），pending 单元若本次
+   * 提取不再产出，说明它来自已被修复的解析噪声或已移除的内容——留着会被翻译
+   * 队列反复拾取、原样写回空转。只清 pending：translated/failed/归档行一律不动。
+   */
+  private pruneMissingPendingUnits(document: Document): void {
+    if (document.allUnits().length === 0) return
+    const stale = this.db.prepare(
+      "SELECT unit_id FROM units WHERE status='pending'",
+    ).all() as Row[]
+    const present = new Set<string>()
+    for (const scene of document.scenes) for (const unit of scene.units) present.add(unit.unit_id)
+    const missing = stale.map((r) => String(r.unit_id)).filter((id) => !present.has(id))
+    if (missing.length === 0) return
+    const del = this.db.prepare('DELETE FROM units WHERE unit_id=? AND status=\'pending\'')
+    for (const id of missing) del.run(id)
   }
 
   unitStatus(unit_id: string): string {
@@ -648,6 +692,14 @@ export class ProjectDB {
     return row ? String(row.worldbook_status ?? '') : ''
   }
 
+  /** 世界书 skip 终态的术语 source 集（仅锁译名、永不出卡——提名制跳过集输入）。 */
+  skipWorldbookTermSources(): string[] {
+    const rows = this.db.prepare(
+      "SELECT source FROM terms WHERE worldbook_status='skip'",
+    ).all() as Row[]
+    return rows.map((r) => String(r.source))
+  }
+
   /** 术语表世界书状态计数（报表用）。 */
   worldbookStatusCounts(): Record<string, number> {
     const rows = this.db.prepare(
@@ -865,6 +917,111 @@ export class ProjectDB {
     return Number(result.lastInsertRowid)
   }
 
+  // ---------------------------------------------------------- worldbook nominations
+
+  /** 提名 upsert（按 source 幂等；不覆盖 dismissed/accepted 状态，只刷新证据与推荐意见）。 */
+  upsertNomination(n: {
+    source: string
+    origin: string
+    kind: string
+    frequency: number
+    spread: number
+    files: number
+    evidence: string[]
+    scenes: string[]
+    hint: string
+    reason: string
+    recommended: boolean
+  }): void {
+    const existing = this.db.prepare('SELECT id, status FROM worldbook_nominations WHERE source=?')
+      .get(n.source) as Row | undefined
+    const ts = now()
+    if (existing) {
+      // dismissed/accepted 是用户决定，不回退；nominated 才刷新推荐意见。
+      if (String(existing.status) !== 'nominated') return
+      this.db.prepare(
+        'UPDATE worldbook_nominations SET origin=?, kind=?, frequency=?, spread=?, files=?, '
+        + 'evidence=?, scenes=?, hint=?, reason=?, recommended=?, updated_at=? WHERE id=?',
+      ).run(
+        n.origin, n.kind, n.frequency, n.spread, n.files,
+        JSON.stringify(n.evidence), JSON.stringify(n.scenes), n.hint,
+        n.reason, n.recommended ? 1 : 0, ts, existing.id,
+      )
+      return
+    }
+    this.db.prepare(
+      'INSERT INTO worldbook_nominations'
+      + '(source, origin, kind, frequency, spread, files, evidence, scenes, hint, reason, recommended, status, created_at, updated_at)'
+      + "VALUES(?,?,?,?,?,?,?,?,?,?,?, 'nominated', ?, ?)",
+    ).run(
+      n.source, n.origin, n.kind, n.frequency, n.spread, n.files,
+      JSON.stringify(n.evidence), JSON.stringify(n.scenes), n.hint,
+      n.reason, n.recommended ? 1 : 0, ts, ts,
+    )
+  }
+
+  /** 列提名（status 空=全部）。 */
+  listNominations(status?: string | null): Array<Record<string, unknown>> {
+    let sql = 'SELECT * FROM worldbook_nominations'
+    const params: unknown[] = []
+    if (status) {
+      sql += ' WHERE status=?'
+      params.push(status)
+    }
+    sql += ' ORDER BY recommended DESC, frequency DESC, id'
+    const rows = this.db.prepare(sql).all(...params) as Row[]
+    return rows.map((r) => {
+      const item = { ...r }
+      item.evidence = parseJson<string[]>(String(item.evidence ?? ''), [])
+      item.scenes = parseJson<string[]>(String(item.scenes ?? ''), [])
+      item.recommended = Number(item.recommended ?? 0) === 1
+      return item
+    })
+  }
+
+  /** 取一批提名。 */
+  getNominations(ids: number[]): Array<Record<string, unknown>> {
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(',')
+    const rows = this.db.prepare(
+      `SELECT * FROM worldbook_nominations WHERE id IN (${placeholders})`,
+    ).all(...ids) as Row[]
+    return rows.map((r) => {
+      const item = { ...r }
+      item.evidence = parseJson<string[]>(String(item.evidence ?? ''), [])
+      item.scenes = parseJson<string[]>(String(item.scenes ?? ''), [])
+      item.recommended = Number(item.recommended ?? 0) === 1
+      return item
+    })
+  }
+
+  /** 批量改提名状态（nominated/accepted/dismissed）。 */
+  setNominationStatus(ids: number[], status: string): number {
+    if (ids.length === 0) return 0
+    if (!['nominated', 'accepted', 'dismissed'].includes(status)) return 0
+    const placeholders = ids.map(() => '?').join(',')
+    const r = this.db.prepare(
+      `UPDATE worldbook_nominations SET status=?, updated_at=? WHERE id IN (${placeholders})`,
+    ).run(status, now(), ...ids)
+    return r.changes
+  }
+
+  /** 已 dismiss 的提名 source 集（buildScanNominees 的 skipKeys 输入）。 */
+  dismissedNominationKeys(): Set<string> {
+    const rows = this.db.prepare(
+      "SELECT source FROM worldbook_nominations WHERE status='dismissed'",
+    ).all() as Row[]
+    return new Set(rows.map((r) => String(r.source).trim().replace(/['-]+$/, '').toLowerCase()))
+  }
+
+  /** force 重提时把 dismissed 行复活回 nominated（按 source 精确匹配）。 */
+  reviveNomination(source: string): void {
+    this.db.prepare(
+      "UPDATE worldbook_nominations SET status='nominated', updated_at=? "
+      + "WHERE status='dismissed' AND source=?",
+    ).run(now(), source)
+  }
+
   /** 术语↔世界书译名一致性：linked_term 指向的锁定术语译名与世界书条目标题冲突时列出。 */
   worldbookTermConflicts(): Array<{
     term: string
@@ -875,11 +1032,15 @@ export class ProjectDB {
     const locked = this.lockedTerms()
     const entries = this.listWorldbook('confirmed')
     const out: Array<{ term: string; termTarget: string; entryId: number; entryTitle: string }> = []
+    // 人名条目标题规范是「中文名（English Name）」，比较前剥掉尾部括注（两侧都剥：
+    // 译名锁定为带括注形态时同样按核心名对齐），避免规范标题被误判成译名冲突。
+    const coreName = (s: string): string =>
+      s.trim().replace(/[（(][^（()）]*[）)]\s*$/, '').trim()
     for (const e of entries) {
       const linked = String(e.linked_term ?? '').trim()
       if (!linked) continue
       const term = locked.find((t) => t.source === linked)
-      if (term && String(e.title ?? '').trim() !== term.target) {
+      if (term && coreName(String(e.title ?? '')) !== coreName(String(term.target ?? ''))) {
         out.push({
           term: linked,
           termTarget: term.target ?? '',

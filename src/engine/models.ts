@@ -188,6 +188,8 @@ export interface UnderstandingDict {
   threads: ThreadDict[]
   term_usage: Array<Record<string, string>>
   style_notes: Array<Record<string, string>>
+  /** 场景级文风/口吻指引（软字段，缺省空串） */
+  tone: string
   flags: Array<Record<string, string>>
   raw: Record<string, unknown>
 }
@@ -202,6 +204,8 @@ export class UnderstandingRecord {
   term_usage: Array<Record<string, string>>
   /** {speaker, note} */
   style_notes: Array<Record<string, string>>
+  /** 场景级文风/口吻/氛围指引（软字段，缺省空串） */
+  tone: string
   /** {kind, source, hint} */
   flags: Array<Record<string, string>>
   raw: Record<string, unknown>
@@ -214,12 +218,14 @@ export class UnderstandingRecord {
     style_notes: Array<Record<string, string>> = [],
     flags: Array<Record<string, string>> = [],
     raw: Record<string, unknown> = {},
+    tone = '',
   ) {
     this.scene_id = scene_id
     this.scene_state = scene_state
     this.threads = threads
     this.term_usage = term_usage
     this.style_notes = style_notes
+    this.tone = tone
     this.flags = flags
     this.raw = raw
   }
@@ -247,6 +253,7 @@ export class UnderstandingRecord {
       })),
       term_usage: this.term_usage,
       style_notes: this.style_notes,
+      tone: this.tone,
       flags: this.flags,
       raw: this.raw,
     }
@@ -269,6 +276,7 @@ export class UnderstandingRecord {
       (data.style_notes ?? []) as Array<Record<string, string>>,
       (data.flags ?? []) as Array<Record<string, string>>,
       (data.raw ?? {}) as Record<string, unknown>,
+      String(data.tone ?? ''),
     )
   }
 }

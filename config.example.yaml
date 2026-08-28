@@ -2,7 +2,7 @@
 # 复制为 <projectDir>/config.yaml 后按项目修改。TS 后端只需 engine / game_dir / lang
 # 及策略字段；llm.api_key 一律留空，翻译统一走 DSH ctx.llm（llmProvider）。
 
-engine: renpy              # 仅支持 renpy（Unity/Yarn/小说已随多引擎支持移除）
+engine: renpy              # 当前适配器仅实现 renpy（其余引擎待对应适配器落地）
 game_dir: C:/path/to/Game   # 游戏根目录
 lang: chinese
 

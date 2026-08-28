@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import yaml from 'js-yaml'
 
@@ -6,6 +6,8 @@ import yaml from 'js-yaml'
 export interface EngineConfig {
   engine: string
   gameDir: string
+  /** 持久化的游戏目录覆盖（config.yaml 顶层 game_dir_override，编译版 _prep 暂存项目）。 */
+  gameDirOverride?: string
   lang: string
   llm: {
     baseUrl: string
@@ -52,6 +54,12 @@ export interface EngineConfig {
     windowRadius: number
     /** 每批最多放几个名字进一次 LLM 调用。 */
     batchTerms: number
+    /** 提名硬淘汰阈值：时序跨度（出现范围/全书行数）低于它的候选连提名都不进。 */
+    minSpread: number
+    /** 理解沉淀通道开关：从场景理解记录提取设定级实体提名。 */
+    sediment: boolean
+    /** 理解沉淀每次 LLM 调用最多带的场景摘录数。 */
+    sedimentBatchScenes: number
   }
   scan: {
     enabled: boolean
@@ -104,6 +112,10 @@ export interface EngineConfig {
   localization: {
     style: string
   }
+  debug: {
+    /** 非空时把每次 LLM 调用的完整请求（system+messages 全文+采样参数）+响应落盘为 JSONL（请求快照，供 A/B 审计/回放）。 */
+    requestSnapshotDir: string
+  }
   translation: {
     /** 翻译风格预设：faithful（忠实直译）| standard（自然通顺）| literary（文学化）。空=未设定（启动时询问）。 */
     stylePreset: string
@@ -111,6 +123,14 @@ export interface EngineConfig {
     stylePrompt: string
     /** 自定义「翻译头」：用户整段覆写/补充喂给模型的翻译指令（注入 rewrite/polish 系统提示）。 */
     head: string
+    /** 反翻译腔禁令族升级（P1）：enabled 缺省 true（P1 结构，A/B 盲评采纳）；categories 空=全部分类启用。 */
+    antiCliche: {
+      enabled: boolean
+      /** true=确定性移除填充词；false=仅报告命中（不改译文）。 */
+      autoFix: boolean
+      /** 启用哪些分类（id 列表）；空=全部分类启用。 */
+      categories: string[]
+    }
   }
   recentProjects: RecentProjectInfo[]
 }
@@ -182,10 +202,15 @@ export function engineConfigFromRaw(raw: DeepPartial<Record<string, unknown>> | 
   const localization = (r.localization ?? {}) as Record<string, unknown>
   const translation = (r.translation ?? {}) as Record<string, unknown>
   const runtime = (r.runtime ?? {}) as Record<string, unknown>
+  const debug = (r.debug ?? {}) as Record<string, unknown>
+  const antiCliche = (translation.anti_cliche ?? {}) as Record<string, unknown>
 
-  return {
+  const cfg: EngineConfig = {
     engine: str(r.engine, 'renpy'),
     gameDir: str(r.game_dir, ''),
+    // 持久化的游戏目录覆盖（编译版 _prep 暂存项目）：select_project 写入 config.yaml，
+    // 让面板/工具链在进程重启后仍指向会话绑定的游戏目录（内存态覆盖会随进程丢失）。
+    gameDirOverride: str(r.game_dir_override, '') || undefined,
     lang: str(r.lang, 'chinese'),
     llm: {
       baseUrl: str(llm.base_url, 'https://api.deepseek.com/v1'),
@@ -229,6 +254,9 @@ export function engineConfigFromRaw(raw: DeepPartial<Record<string, unknown>> | 
       sampleWindows: num(worldbook.sample_windows, 6),
       windowRadius: num(worldbook.window_radius, 3),
       batchTerms: num(worldbook.batch_terms, 10),
+      minSpread: num(worldbook.min_spread, 0.15),
+      sediment: bool(worldbook.sediment, true),
+      sedimentBatchScenes: num(worldbook.sediment_batch_scenes, 40),
     },
     scan: {
       enabled: bool(scan.enabled, true),
@@ -286,13 +314,23 @@ export function engineConfigFromRaw(raw: DeepPartial<Record<string, unknown>> | 
     localization: {
       style: str(localization.style, 'mixed'),
     },
+    debug: {
+      requestSnapshotDir: str(debug.request_snapshot_dir, ''),
+    },
     translation: {
       stylePreset: str(translation.style_preset, ''),
       stylePrompt: str(translation.style_prompt, ''),
       head: str(translation.head, ''),
+      antiCliche: {
+        enabled: bool(antiCliche.enabled, true),
+        autoFix: bool(antiCliche.auto_fix, false),
+        categories: strList(antiCliche.categories, []),
+      },
     },
     recentProjects: recentProjectsFromRaw(r.recent_projects),
   }
+  if (cfg.gameDirOverride) cfg.gameDir = cfg.gameDirOverride
+  return cfg
 }
 
 /** 解析 config.yaml 文本为引擎配置。 */
@@ -344,8 +382,8 @@ export function loadEngineConfigFor(
 export function assertSupportedEngine(engineCfg: EngineConfig): void {
   if (engineCfg.engine === 'renpy') return
   throw new Error(
-    `config.yaml 声明 engine=${engineCfg.engine}，但 dsh-plugin-tav2 已移除 Unity/Yarn 与小说引擎支持、`
-    + '仅支持 Ren\'Py（engine: renpy）。请改用 Ren\'Py 游戏，或回退到归档 tag pre-renpy-only 处理旧游戏，详见 README。',
+    `config.yaml 声明 engine=${engineCfg.engine}，但 dsh-plugin-tav2 当前适配器仅实现 Ren'Py（engine: renpy），`
+    + '暂无法处理其他引擎。请改用 Ren\'Py 游戏，或在对应引擎适配器落地后再用。',
   )
 }
 
@@ -381,5 +419,43 @@ export function readRecentProjects(configPath: string | undefined, projectDir: s
     return config.recentProjects
   } catch {
     return []
+  }
+}
+
+/**
+ * 旧暂存链路项目数据迁移：prepare 重构后编译版游戏直接绑定真实游戏目录，
+ * 项目 DB 从 projects/<游戏名>_prep 变为 projects/<游戏名>。检测到旧目录有
+ * db.sqlite 且新目录还没有时整体拷贝（含审校 CSV / 审批 / 指纹），术语、
+ * 世界书与翻译记忆不丢；旧目录保留不删。返回给用户看的说明（未迁移返回 null）。
+ */
+export function migrateLegacyPrepProject(source: {
+  engineConfigPath: string
+  projectDir: string
+  gameDirOverride?: string
+  langOverride?: string
+  engineOverride?: string
+}): string | null {
+  let engineCfg: EngineConfig
+  try {
+    engineCfg = loadEngineConfigFor(source)
+  } catch {
+    return null
+  }
+  if (engineCfg.engine !== 'renpy' || !engineCfg.gameDir) return null
+  const gameName = basename(engineCfg.gameDir)
+  if (!gameName || gameName.endsWith('_prep')) return null // 仍绑定旧暂存区：无需迁移
+  const projectDir = resolveProjectDir(engineCfg, source.engineConfigPath, source.projectDir)
+  const legacyDir = join(dirname(projectDir), `${gameName}_prep`)
+  if (legacyDir === projectDir) return null
+  if (!existsSync(join(legacyDir, 'db.sqlite'))) return null
+  if (existsSync(join(projectDir, 'db.sqlite'))) return null
+  try {
+    mkdirSync(projectDir, { recursive: true })
+    cpSync(legacyDir, projectDir, { recursive: true })
+    return `已迁移旧暂存项目数据：${legacyDir} → ${projectDir}（术语/世界书/审校记录保留，旧目录未删除）。`
+      + '若 config.yaml 仍残留 game_dir_override 指向旧暂存目录，请用 tav2_select_project 切回配置目录清除。'
+  } catch (err) {
+    console.warn('[dsh-plugin-tav2] 旧暂存项目数据迁移失败：', err)
+    return null
   }
 }

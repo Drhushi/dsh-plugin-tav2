@@ -3,7 +3,7 @@
  *
  * 安装模型（去开关后，agent/created 一律调用本函数，按工作区自动分级）：
  * - 游戏工作区（含 config.yaml / 能识别为 Ren'Py）→ 全套（full）：全部 tav2_* 工具
- *   + tav2-renpy-workflow 技能 + 翻译 persona + 子代理并行上限变量。
+ *   + tav2-workflow 技能 + 翻译 persona + 子代理并行上限变量。
  * - 普通工作区（识别不出游戏）→ 轻量引导包（slim）：tav2_detect / tav2_init /
  *   tav2_select_project / tav2_status + 引导 persona（提示用户说「初始化游戏翻译」）。
  * - /tav2-mode on 仍可强制把当前会话升级为全套（rearm，兼容旧流程）。
@@ -28,7 +28,7 @@ import {
   setScopeKind,
   type ScopeKind,
 } from './scope_track'
-import { registerRenpyWorkflowSkill } from './skills/renpyWorkflow'
+import { registerWorkflowSkill } from './skills/workflow'
 import { ALL_TOOL_NAMES, SLIM_TOOL_NAMES, registerTools } from './tools'
 import { mergeTranslationApi } from './tools/translationApi'
 import { applyWorkspaceCwd, resolveLang, setSessionLangOverride } from './tools/select_project'
@@ -164,7 +164,7 @@ export function applyTranslationScope(
       markToolsRegistered(agentId, delta)
     }
     if (kind === 'full' && !hasWorkflowSkill(agentId)) {
-      registerRenpyWorkflowSkill(actx)
+      registerWorkflowSkill(actx)
       markWorkflowSkill(agentId)
     }
     if (kind === 'full') {
@@ -223,7 +223,7 @@ export function upgradeAgentScopeToFull(
     markToolsRegistered(agentId, delta)
   }
   if (!hasWorkflowSkill(agentId)) {
-    registerRenpyWorkflowSkill(actx)
+    registerWorkflowSkill(actx)
     markWorkflowSkill(agentId)
   }
   try {
@@ -267,11 +267,12 @@ export interface LangCommandResult {
 
 /** 处理 /tav2-lang status|<lang>（测试可直调）。 */
 export function handleLangCommand(agentId: string, rawInput: string, baseConfig: Config): LangCommandResult {
-  const token = (rawInput ?? '').trim().toLowerCase().replace(/_/g, '-')
+  // 保留下划线：自定义语言码（如 chinese_tav2）不能被转成 chinese-tav2。
+  const token = (rawInput ?? '').trim().toLowerCase()
   if (!token) {
     return {
       kind: 'error',
-      text: '用法：/tav2-lang status|<lang>（支持 chinese/english/zh-CN/en-US 等）',
+      text: '用法：/tav2-lang status|<lang>（支持 chinese/english/zh-CN/en-US/chinese_tav2 等）',
     }
   }
   if (token === 'status') {
@@ -281,13 +282,14 @@ export function handleLangCommand(agentId: string, rawInput: string, baseConfig:
       text: `本会话目标语言：${current}（写入 Ren'Py tl/${current}）`,
     }
   }
-  if (!/^[a-z0-9-]{2,20}$/u.test(token)) {
+  if (!/^[a-z0-9_-]{2,20}$/u.test(token)) {
     return {
       kind: 'error',
-      text: `非法语言：${rawInput.trim()}（支持 chinese/english/zh-CN/en-US 等）`,
+      text: `非法语言：${rawInput.trim()}（支持 chinese/english/zh-CN/en-US/chinese_tav2 等）`,
     }
   }
-  const canonical = LANG_ALIASES[token] ?? token
+  // 别名归一：zh_cn → zh-CN 兼容旧写法；chinese_tav2 这类自定义码原样保留。
+  const canonical = LANG_ALIASES[token] ?? LANG_ALIASES[token.replace(/_/g, '-')] ?? token
   setAgentLang(agentId, canonical)
   return {
     kind: 'success',

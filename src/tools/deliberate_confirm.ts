@@ -13,10 +13,12 @@ export interface DeliberateConfirmArgs {
   kind?: string
   /** approve/reject 的审批 id 列表 */
   ids?: number[]
-  /** update 的目标审批 id */
+  /** update 的目标审批 id（单条，兼容保留） */
   id?: number
-  /** update 的新译名 */
+  /** update 的新译名（单条，兼容保留） */
   target?: string
+  /** update 批量：一次审批改多条译名并锁定 */
+  updates?: Array<{ id: number; target: string }>
 }
 
 interface DeliberateConfirmResult {
@@ -31,7 +33,12 @@ function describe(args: DeliberateConfirmArgs): string {
   switch (args.action) {
     case 'approve': return `批准 ${(args.ids ?? []).length} 条术语推敲建议并锁定`
     case 'reject': return `拒绝 ${(args.ids ?? []).length} 条术语推敲建议`
-    case 'update': return `修改术语推敲建议 #${args.id} 译名为「${args.target ?? ''}」并锁定`
+    case 'update': {
+      const n = args.updates?.length ?? 1
+      return n > 1
+        ? `批量修改 ${n} 条术语推敲建议的译名并锁定`
+        : `修改术语推敲建议 #${args.updates?.[0]?.id ?? args.id} 译名为「${args.updates?.[0]?.target ?? args.target ?? ''}」并锁定`
+    }
     default: return '术语推敲定论'
   }
 }
@@ -58,11 +65,23 @@ export function registerDeliberateConfirmTool(ctx: Context, config: Config): voi
       },
       id: {
         type: 'number',
-        description: 'update 的目标审批 id',
+        description: 'update 的目标审批 id（单条）',
       },
       target: {
         type: 'string',
-        description: 'update 的新译名',
+        description: 'update 的新译名（单条）',
+      },
+      updates: {
+        type: 'array',
+        description: 'update 批量：[{id, target}]，一次审批改多条译名并锁定（优先于 id/target）',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', description: '审批 id' },
+            target: { type: 'string', description: '新译名' },
+          },
+          additionalProperties: false,
+        },
       },
     },
     output: {
@@ -139,28 +158,51 @@ export function registerDeliberateConfirmTool(ctx: Context, config: Config): voi
             return { ok: true, action: 'reject', affected, text: `已拒绝 ${affected} 条术语建议。` }
           }
           case 'update': {
-            const id = args.id ?? 0
-            const target = (args.target ?? '').trim()
-            if (!target) {
-              return { ok: false, action: 'update', affected: 0, text: 'update 必须提供 target' }
+            // 单条（id/target）与批量（updates）统一走同一条应用路径。
+            const pendingUpdates: Array<{ id: number; target: string }> = (args.updates ?? [])
+              .map((u) => ({ id: Number(u.id), target: String(u.target ?? '').trim() }))
+              .filter((u) => Number.isFinite(u.id) && u.id > 0 && u.target)
+            if (pendingUpdates.length === 0) {
+              const id = args.id ?? 0
+              const target = (args.target ?? '').trim()
+              if (!target) return { ok: false, action: 'update', affected: 0, text: 'update 必须提供 target（或批量 updates）' }
+              if (!id) return { ok: false, action: 'update', affected: 0, text: 'update 必须提供 id（或批量 updates）' }
+              pendingUpdates.push({ id, target })
             }
-            const a = db.approvalById(id)
-            if (!a) {
-              return { ok: false, action: 'update', affected: 0, text: `审批 #${id} 不存在` }
+            const applyOne = (item: { id: number; target: string }): string | null => {
+              const a = db.approvalById(item.id)
+              if (!a) return `审批 #${item.id} 不存在`
+              const p = (a.payload ?? {}) as Record<string, unknown>
+              const source = String(p.source ?? '').trim()
+              if (!source) return `审批 #${item.id} 缺少 source`
+              // S13：落库前清旧候选，改译名不叠加行
+              db.clearCandidateTermsBySource(source)
+              db.upsertTerm(source, item.target, String(p.category ?? ''), 'candidate', String(p.confidence ?? 'medium'), String(p.rationale ?? ''))
+              const row = db.termBySourceTarget(source, item.target)
+              const tid = Number(row?.id)
+              if (Number.isFinite(tid)) db.decideTerm(tid, 'locked')
+              db.decideApproval(item.id, 'approved')
+              return null
             }
-            const p = (a.payload ?? {}) as Record<string, unknown>
-            const source = String(p.source ?? '').trim()
-            if (!source) {
-              return { ok: false, action: 'update', affected: 0, text: `审批 #${id} 缺少 source` }
+            let affected = 0
+            const failures: string[] = []
+            for (const item of pendingUpdates) {
+              const err = applyOne(item)
+              if (err) failures.push(err)
+              else affected += 1
             }
-            // S13：落库前清旧候选，改译名不叠加行
-            db.clearCandidateTermsBySource(source)
-            db.upsertTerm(source, target, String(p.category ?? ''), 'candidate', String(p.confidence ?? 'medium'), String(p.rationale ?? ''))
-            const row = db.termBySourceTarget(source, target)
-            const tid = Number(row?.id)
-            if (Number.isFinite(tid)) db.decideTerm(tid, 'locked')
-            db.decideApproval(id, 'approved')
-            return { ok: true, action: 'update', affected: 1, text: `已按新译名「${target}」锁定 ${source}。` }
+            if (affected === 0) {
+              return { ok: false, action: 'update', affected: 0, text: failures.join('；') || '没有任何条目被更新' }
+            }
+            const head = pendingUpdates.length > 1
+              ? `已批量锁定 ${affected}/${pendingUpdates.length} 条译名。`
+              : `已按新译名「${pendingUpdates[0]!.target}」锁定。`
+            return {
+              ok: true,
+              action: 'update',
+              affected,
+              text: failures.length ? `${head} 失败：${failures.join('；')}` : head,
+            }
           }
           default:
             return { ok: false, action: args.action, affected: 0, text: `未知操作：${String(args.action)}` }

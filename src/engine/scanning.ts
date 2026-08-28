@@ -40,7 +40,15 @@ const EXTRA_STOPWORDS = new Set([
   'wanna', 'kinda', 'sorta', 'hmm', 'huh', 'mmm', 'ugh', 'phew',
 ])
 
-const ALL_STOPWORDS = new Set([...STOPWORDS, ...EXTRA_STOPWORDS])
+/** 拟声/感叹/语气词（句首大写会混过专名正则，如 Hehe/Hiccup；世界书与术语都不收）。 */
+const INTERJECTION_STOPWORDS = new Set([
+  'hehe', 'hehehe', 'haha', 'hahaha', 'hah', 'mm', 'mmm', 'ooh', 'aah', 'ahh',
+  'whoa', 'oops', 'whoops', 'yay', 'yikes', 'eww', 'gulp', 'sigh', 'sighs',
+  'sob', 'sobs', 'hiccup', 'hiccups', 'whimper', 'whimpers', 'giggle',
+  'giggles', 'chuckle', 'chuckles', 'gasp', 'gasps', 'moan', 'moans',
+])
+
+const ALL_STOPWORDS = new Set([...STOPWORDS, ...EXTRA_STOPWORDS, ...INTERJECTION_STOPWORDS])
 
 export interface ScanCandidate {
   source: string
@@ -115,7 +123,12 @@ export function findOccurrences(lines: string[], source: string): number[] {
 
 function collectWords(text: string): string[] {
   const out: string[] = []
-  for (const m of text.matchAll(WORD_RE)) out.push(m[0])
+  for (const m of text.matchAll(WORD_RE)) {
+    // 词法修复：WORD_RE 允许词中连字符，但断词换行会把「fembo-」这类截断残片整词捕获，
+    // 剥掉词尾连字符/撇号/下划线再收。
+    const token = m[0].replace(/['_-]+$/, '')
+    if (token) out.push(token)
+  }
   return out
 }
 

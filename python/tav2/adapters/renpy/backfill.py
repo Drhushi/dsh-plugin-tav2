@@ -90,20 +90,29 @@ def backfill_review(
     rows: list[dict[str, Any]],
     force: bool = False,
 ) -> dict[str, int]:
-    """回填审校行到 tl 文件（可选审校模式的回填入口）。返回统计。"""
+    """回填审校行到 tl 文件（可选审校模式的回填入口）。返回统计（含 skip_reasons）。"""
 
     dialogue_map: dict[tuple[str, str], dict[int, str]] = {}
     string_map: dict[tuple[str, str], str] = {}
     skipped = 0
+    skip_reasons: dict[str, int] = {}
+
+    def skip(reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
 
     for row in rows:
         status = str(row.get("状态") or "待审")
-        if status == "跳过" or (status not in APPLY_STATUSES and not force):
-            skipped += 1
+        if status == "跳过":
+            skip("状态=跳过")
+            continue
+        if status not in APPLY_STATUSES and not force:
+            skip(f"状态={status}（需 已确认/已修改，或 --force）")
             continue
         translation = str(row.get("人工译文") or row.get("机器译文") or "").strip()
         if not translation:
-            skipped += 1
+            skip("人工译文与机器译文均为空")
             continue
         row_type = str(row.get("类型") or "")
         filename = str(row.get("文件") or "")
@@ -117,7 +126,10 @@ def backfill_review(
         elif row_type == "string":
             old = str(row.get("标识符") or "")
             string_map[(filename, old)] = translation
+        else:
+            skip(f"未知类型={row_type or '（空）'}")
 
     stats = _apply_maps(game_dir, lang, dialogue_map, string_map)
     stats["skipped"] += skipped
+    stats["skip_reasons"] = skip_reasons  # type: ignore[assignment]
     return stats

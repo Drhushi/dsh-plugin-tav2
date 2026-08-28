@@ -118,26 +118,35 @@ export function readReviewCsv(path: string): ReviewRow[] {
   return rows
 }
 
-/** 把审校 CSV 行回填到 tl 文件；返回 backfill 统计 + skipped。 */
+/** 把审校 CSV 行回填到 tl 文件；返回 backfill 统计 + skipped（含逐原因计数，拒绝静默 no-op）。 */
 export function backfillReviewCsv(
   gameRoot: string,
   lang: string,
   rows: ReviewRow[],
   force = false,
-): BackfillStats & { skipped: number } {
+): BackfillStats & { skipped: number; skipReasons: Record<string, number> } {
   const dialogueMap = new Map<string, Map<string | number, string>>()
   const stringMap = new Map<string, string>()
   let skipped = 0
+  const skipReasons: Record<string, number> = {}
+  const skip = (reason: string): void => {
+    skipped += 1
+    skipReasons[reason] = (skipReasons[reason] ?? 0) + 1
+  }
 
   for (const row of rows) {
     const status = row['状态'] || '待审'
-    if (status === '跳过' || (!APPLY_STATUSES.has(status) && !force)) {
-      skipped += 1
+    if (status === '跳过') {
+      skip('状态=跳过')
+      continue
+    }
+    if (!APPLY_STATUSES.has(status) && !force) {
+      skip(`状态=${status}（需 已确认/已修改，或 force）`)
       continue
     }
     const translation = (row['人工译文'] || row['机器译文'] || '').trim()
     if (!translation) {
-      skipped += 1
+      skip('人工译文与机器译文均为空')
       continue
     }
     const rowType = row['类型'] || ''
@@ -151,11 +160,13 @@ export function backfillReviewCsv(
     } else if (rowType === 'string') {
       const old = row['标识符'] || ''
       stringMap.set(`${filename}|${old}`, translation)
+    } else {
+      skip(`未知类型=${rowType || '（空）'}`)
     }
   }
 
   const stats = backfillMachine(gameRoot, lang, dialogueMap, stringMap)
-  return { ...stats, skipped: stats.skipped + skipped }
+  return { ...stats, skipped: stats.skipped + skipped, skipReasons }
 }
 
 function parseCsv(text: string): string[][] {
