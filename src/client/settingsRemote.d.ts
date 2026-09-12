@@ -39,6 +39,22 @@ export function cardModelOf(row: unknown): {
 export function channelRefOf(name: string): string
 export function channelProblem(channel: { name?: unknown; baseUrl?: unknown } | null | undefined, existingNames?: string[]): string | null
 export function invalidChannelRows(channels: unknown): number[]
+export type ChannelRowView = {
+  index: number
+  name: string
+  ref: string
+  invalid: boolean
+  problem: string | null
+  baseUrl: string
+  model: string
+  scope: string
+}
+/** 渠道行 → 渲染视图（纯函数，永不抛错）。 */
+export function channelRowViewsOf(channels: unknown): ChannelRowView[]
+/** 空渠道行（点「添加渠道」新增时的初值）。 */
+export function emptyChannel(): ChannelDraft
+/** 卡片草稿是否含未保存改动（重挂载时决定能否用服务器状态覆盖）。 */
+export function draftIsDirty(draft: unknown): boolean
 export function readCredentialStates(credentials: unknown, refs: unknown): Promise<{
   ok: boolean
   states: Record<string, boolean>

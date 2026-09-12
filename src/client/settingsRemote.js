@@ -178,16 +178,25 @@ export function channelRefOf(name) {
 
 /**
  * 保存前校验一个渠道行。
+ * 对畸形输入（name 不是字符串等）也必须安全：这个函数在渲染期逐行调用，
+ * 抛错会把整张卡片卸载（用户看到的就是「面板消失」）。
  * @returns 错误文案，合法时 null。
  */
 export function channelProblem(channel, existingNames) {
-  const name = (channel?.name ?? '').trim()
+  const name = textOf(channel?.name).trim()
   if (name === '') return '渠道名称不能为空'
   if ((existingNames ?? []).includes(name)) return '渠道名称重复'
   // 凭据引用名是 TAV2_<渠道名>，含非标识符字符时宿主的 credentials.set 会拒绝
   if (!/^[A-Za-z0-9_]+$/.test(name)) return '渠道名称只能用字母、数字、下划线（密钥引用名 TAV2_<名称> 的合法性要求）'
-  if ((channel?.baseUrl ?? '').trim() === '') return '接口地址必填'
+  if (textOf(channel?.baseUrl).trim() === '') return '接口地址必填'
   return null
+}
+
+/** 任意值 → 字符串（非字符串值先转换，避免 .trim() 抛错）。 */
+function textOf(value) {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  return String(value)
 }
 
 /** 卡片校验：返回不合法行的下标列表（组件据此禁用保存按钮）。 */
@@ -201,6 +210,57 @@ export function invalidChannelRows(channels) {
     if (name !== '') seen.add(name)
   })
   return invalid
+}
+
+/**
+ * 渠道行 → 渲染视图（纯函数，永不抛错）。
+ * 组件渲染只做 map，不在渲染期做可能失败的判断——畸形数据也必须能画出一行，
+ * 否则渲染异常会把整张卡片卸载（用户看到的就是「面板消失」）。
+ * @param channels - 渠道数组（可为 null/畸形）
+ * @returns 每行一个视图：{index, name, ref, invalid, problem, baseUrl, model, scope}
+ */
+export function channelRowViewsOf(channels) {
+  const list = Array.isArray(channels) ? channels : []
+  const names = list.map((channel) => (typeof channel?.name === 'string' ? channel.name : ''))
+  const seen = []
+  return list.map((channel, index) => {
+    const name = names[index].trim()
+    // 与 invalidChannelRows 同语义：重复只标在后出现的那条（前面已出现过的名字才算「重」）
+    const problem = channelProblem(channel, seen)
+    if (name !== '') seen.push(name)
+    return {
+      index,
+      name,
+      ref: channelRefOf(name),
+      invalid: problem !== null,
+      problem,
+      baseUrl: typeof channel?.baseUrl === 'string' ? channel.baseUrl : '',
+      model: typeof channel?.model === 'string' ? channel.model : '',
+      scope: SCOPE_VALUES.includes(channel?.scope) ? channel.scope : 'main',
+    }
+  })
+}
+
+/** 空渠道行（点「添加渠道」新增时的初值）。 */
+export function emptyChannel() {
+  return { name: '', baseUrl: '', model: '', scope: 'main' }
+}
+
+/**
+ * 卡片草稿是否含未保存改动。
+ * 宿主/父级重渲染可能重新挂载本卡片（组件内 state 复位 → 面板收起、草稿丢失）；
+ * 草稿存在模块级变量里，用这个判定决定「重挂载后能否直接用服务器状态覆盖草稿」。
+ */
+export function draftIsDirty(draft) {
+  if (draft === null || draft === undefined) return false
+  if (!draft.base) return true
+  const current = JSON.stringify({
+    channels: draft.channels ?? [],
+    active: draft.active ?? '',
+    renpySdk: draft.renpySdk ?? '',
+  })
+  if (current !== draft.base) return true
+  return Object.values(draft.keyDrafts ?? {}).some((value) => typeof value === 'string' && value.trim() !== '')
 }
 
 /**

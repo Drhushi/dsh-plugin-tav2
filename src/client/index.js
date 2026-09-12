@@ -20,7 +20,9 @@ import {
   cardFatalMessage,
   cardModelOf,
   channelRefOf,
-  invalidChannelRows,
+  channelRowViewsOf,
+  draftIsDirty,
+  emptyChannel,
   namespaceRowOf,
   readCredentialStates,
   readSettingsDescribe,
@@ -311,25 +313,34 @@ const SCOPE_LABELS = {
 // 渠道密钥存在宿主凭据域，引用名 = TAV2_<渠道名>（必须匹配宿主 REF_PATTERN
 // /^[A-Za-z_][A-Za-z0-9_]*$/）；渠道名的字符集校验见 settingsRemote.channelProblem。
 
+/**
+ * 设置卡草稿（模块级）：宿主或父级重渲染可能**重新挂载**本卡片，组件内 state 随之复位
+ * —— 表现就是「点添加渠道后面板消失（open 复位成 false）、草稿丢失」，而服务器数据没动。
+ * 因此把可恢复的状态缓存在模块级，重挂载时先恢复；只有草稿不脏时才允许用服务器状态覆盖。
+ * （会话内每屏只有一张本卡片，无需按 key 区分。）
+ */
+let cardDraft = null
+
 /** 设置 → 插件 → dsh-plugin-tav2 卡片：初始化引导 + 插件依赖 + 翻译渠道。
  *  渠道=名称/接口地址/模型/覆盖范围 + 密钥（存宿主凭据域，ref=TAV2_<渠道名>）；当前渠道快速切换。
  *  数据通道=dsh 0.1.5 的 Remote 设置通道（ctx.remote.settings / ctx.remote.credentials），
  *  形状适配与错误归一见 src/client/settingsRemote.js。 */
 function TranslationApiCard() {
-  const [loading, setLoading] = React.useState(true)
+  const restored = cardDraft                       // 重挂载时恢复草稿（含折叠状态与密钥输入）
+  const [loading, setLoading] = React.useState(restored === null)
   const [error, setError] = React.useState(null)
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(restored?.open ?? false)
   const [available, setAvailable] = React.useState(true)
   const [fatal, setFatal] = React.useState(null)        // 通道/命名空间不可用时的降级文案
-  const [writable, setWritable] = React.useState(true)
-  const [channels, setChannels] = React.useState([])   // [{name, baseUrl, model, scope}]
-  const [active, setActive] = React.useState('')        // 当前渠道名；''=宿主
-  const [renpySdk, setRenpySdk] = React.useState('')    // Ren'Py SDK 路径（覆盖插件 yaml 层）
-  const [revision, setRevision] = React.useState(undefined) // 读到的命名空间 revision（写时做并发检测）
-  const [expanded, setExpanded] = React.useState({})    // 渠道盒子折叠状态（默认收起）
-  const [base, setBase] = React.useState(null)          // 上次保存快照（判断脏）
-  const [keyDrafts, setKeyDrafts] = React.useState({})  // 渠道名 -> 密钥输入
-  const [configured, setConfigured] = React.useState({})// ref -> 已配置
+  const [writable, setWritable] = React.useState(restored?.writable ?? true)
+  const [channels, setChannels] = React.useState(restored?.channels ?? [])   // [{name, baseUrl, model, scope}]
+  const [active, setActive] = React.useState(restored?.active ?? '')        // 当前渠道名；''=宿主
+  const [renpySdk, setRenpySdk] = React.useState(restored?.renpySdk ?? '')  // Ren'Py SDK 路径（覆盖插件 yaml 层）
+  const [revision, setRevision] = React.useState(restored?.revision)        // 读到的命名空间 revision（写时做并发检测）
+  const [expanded, setExpanded] = React.useState(restored?.expanded ?? {})  // 渠道盒子折叠状态（默认收起）
+  const [base, setBase] = React.useState(restored?.base ?? null)            // 上次保存快照（判断脏）
+  const [keyDrafts, setKeyDrafts] = React.useState(restored?.keyDrafts ?? {})  // 渠道名 -> 密钥输入
+  const [configured, setConfigured] = React.useState(restored?.configured ?? {})// ref -> 已配置
   const [saving, setSaving] = React.useState(false)
   const [saveFailed, setSaveFailed] = React.useState(false)
 
@@ -366,22 +377,38 @@ function TranslationApiCard() {
     setError(null)
   }
 
-  React.useEffect(() => { void refresh() }, [])
+  // 挂载：有未保存草稿就保留草稿（本次多半是重挂载），否则才用服务器状态刷新
+  React.useEffect(() => {
+    if (draftIsDirty(cardDraft)) { setLoading(false); return }
+    void refresh()
+  }, [])
+
+  // 每次渲染后把可恢复状态写回模块级草稿（重挂载时用来复原）
+  React.useEffect(() => {
+    cardDraft = {
+      open, channels, active, renpySdk, revision, expanded, keyDrafts, configured, base, writable,
+      dirty: !base || JSON.stringify({ channels, active, renpySdk }) !== base
+        || Object.values(keyDrafts).some((k) => typeof k === 'string' && k.trim() !== ''),
+    }
+  })
 
   const keyDirty = Object.values(keyDrafts).some((k) => typeof k === 'string' && k.trim() !== '')
   const dirty = !base || JSON.stringify({ channels, active, renpySdk }) !== base || keyDirty
-  // 校验：名称非空且不重复且字符集合法（密钥引用名 TAV2_<名> 的合法性）、接口地址必填
-  const invalidRows = invalidChannelRows(channels)
+  // 校验与渲染视图都来自纯函数（畸形数据不抛错：渲染期抛错会把整张卡片卸载）
+  const rows = channelRowViewsOf(channels)
+  const invalidRows = rows.filter((row) => row.invalid).map((row) => row.index)
 
   const editChannel = (index, field, value) => {
     setChannels((prev) => prev.map((c, i) => (i === index ? { ...c, [field]: value } : c)))
   }
 
   const addChannel = () => {
-    const idx = channels.length
-    setChannels((prev) => [...prev, { name: '', baseUrl: '', model: '', scope: 'main' }])
-    // 新渠道默认展开，便于直接填写
-    setExpanded((prev) => ({ ...prev, [idx]: true }))
+    // 用函数式更新取长度：闭包里的 channels 可能已过期（重挂载/快速连点）
+    setChannels((prev) => {
+      const next = [...prev, emptyChannel()]
+      setExpanded((current) => ({ ...current, [prev.length]: true }))   // 新行默认展开，便于直接填写
+      return next
+    })
   }
 
   const removeChannel = (index) => {
@@ -396,8 +423,7 @@ function TranslationApiCard() {
       return
     }
     if (invalidRows.length > 0) {
-      const first = channels[invalidRows[0]]
-      setError(`请先修正渠道：${channelProblem(first, channels.filter((_, i) => i !== invalidRows[0]).map((c) => (c.name || '').trim())) ?? '名称非空且不重复、接口地址必填'}。`)
+      setError(`请先修正渠道：${rows[invalidRows[0]]?.problem ?? '名称非空且不重复、接口地址必填'}。`)
       return
     }
     setSaving(true)
@@ -511,9 +537,11 @@ function TranslationApiCard() {
   )
 
   // 渠道行：每个渠道一个可折叠盒子（默认收起；展开显示名称/接口地址/模型/范围 + 密钥）
-  const channelRows = channels.map((c, i) => {
-    const invalid = invalidRows.includes(i)
-    const ref = channelRefOf(c.name)
+  // 渲染只消费 rows（纯函数视图）：畸形数据也不会在渲染期抛错把整张卡片卸载
+  const channelRows = rows.map((row) => {
+    const i = row.index
+    const invalid = row.invalid
+    const ref = row.ref
     const isExpanded = Boolean(expanded[i])
     const boxCls = invalid ? 'tv2-channelBox tv2-channelBoxInvalid' : 'tv2-channelBox'
     return h('div', { key: i, className: boxCls },
@@ -525,7 +553,7 @@ function TranslationApiCard() {
           style: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left' },
           onClick: () => setExpanded((prev) => ({ ...prev, [i]: !prev[i] })),
         },
-          h('span', { className: 'tv2-label' }, `渠道 ${i + 1}：${c.name || '（未命名）'}`),
+          h('span', { className: 'tv2-label' }, `渠道 ${i + 1}：${row.name || '（未命名）'}`),
           h('span', { className: configured[ref] ? 'tv2-badge' : 'tv2-badgeMuted' }, configured[ref] ? '密钥已配置' : '密钥未配置'),
           h('span', { className: isExpanded ? 'tv2-chevron tv2-chevronOpen' : 'tv2-chevron' }, '▸')),
         h('button', { type: 'button', className: 'tv2-reset', disabled: !writable, onClick: () => removeChannel(i) }, '删除')),
@@ -533,19 +561,19 @@ function TranslationApiCard() {
         h('div', { className: 'tv2-grid' },
           h('div', { className: 'tv2-cell' },
             h('label', { htmlFor: `tav2-name-${i}`, className: 'tv2-label' }, '名称'),
-            h('input', { id: `tav2-name-${i}`, type: 'text', className: 'tv2-input', value: c.name, disabled: !writable,
+            h('input', { id: `tav2-name-${i}`, type: 'text', className: 'tv2-input', value: row.name, disabled: !writable,
               placeholder: '如：火山 / 本地', onChange: (e) => editChannel(i, 'name', e.target.value) })),
           h('div', { className: 'tv2-cell' },
             h('label', { htmlFor: `tav2-baseUrl-${i}`, className: 'tv2-label' }, '接口地址'),
-            h('input', { id: `tav2-baseUrl-${i}`, type: 'text', className: 'tv2-input', value: c.baseUrl, disabled: !writable,
+            h('input', { id: `tav2-baseUrl-${i}`, type: 'text', className: 'tv2-input', value: row.baseUrl, disabled: !writable,
               placeholder: 'https://api.example.com/v1', onChange: (e) => editChannel(i, 'baseUrl', e.target.value) })),
           h('div', { className: 'tv2-cell' },
             h('label', { htmlFor: `tav2-model-${i}`, className: 'tv2-label' }, '模型（可选）'),
-            h('input', { id: `tav2-model-${i}`, type: 'text', className: 'tv2-input', value: c.model, disabled: !writable,
+            h('input', { id: `tav2-model-${i}`, type: 'text', className: 'tv2-input', value: row.model, disabled: !writable,
               placeholder: '留空=用 config.yaml 的 llm.model', onChange: (e) => editChannel(i, 'model', e.target.value) })),
           h('div', { className: 'tv2-cell' },
             h('label', { htmlFor: `tav2-scope-${i}`, className: 'tv2-label' }, '覆盖范围'),
-            h('select', { id: `tav2-scope-${i}`, className: 'tv2-input', value: c.scope, disabled: !writable,
+            h('select', { id: `tav2-scope-${i}`, className: 'tv2-input', value: row.scope, disabled: !writable,
               onChange: (e) => editChannel(i, 'scope', e.target.value) },
               SCOPE_VALUES.map((s) => h('option', { key: s, value: s }, SCOPE_LABELS[s])))),
         ),
@@ -556,15 +584,13 @@ function TranslationApiCard() {
             type: 'password',
             autoComplete: 'off',
             className: 'tv2-input',
-            value: keyDrafts[c.name] || '',
+            value: keyDrafts[row.name] || '',
             disabled: !writable,
             placeholder: configured[ref] ? '已保存（留空不改）' : '',
-            onChange: (event) => setKeyDrafts((prev) => ({ ...prev, [c.name]: event.target.value })),
+            onChange: (event) => setKeyDrafts((prev) => ({ ...prev, [row.name]: event.target.value })),
           })),
         invalid
-          ? h('p', { className: 'tv2-invalid' },
-            channelProblem(c, channels.filter((_, j) => j !== i).map((x) => (x.name || '').trim()))
-              ?? '名称非空且不重复、接口地址必填')
+          ? h('p', { className: 'tv2-invalid' }, row.problem ?? '名称非空且不重复、接口地址必填')
           : null,
       ) : null,
     )
