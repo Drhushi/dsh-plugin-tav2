@@ -5,7 +5,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { approvalDenialText, requestApproval } from '../core/approval'
+import { approvalDenialText, requestApproval } from './approval'
 import type { EngineConfig } from '../engine/config'
 import { resolveProjectDbPath } from '../engine/config'
 

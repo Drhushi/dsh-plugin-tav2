@@ -281,6 +281,11 @@ export async function runTranslationWorker(request: TranslationWorkerRequest): P
   try {
     handle = await agents.create({
       sessionId: childId,
+      // 运行期归属：dsh 0.1.5 的 CreateAgentOptions.parentAgent（「Live parent Agent for
+      // runtime ownership; omit for a root Agent」）。不传则子代理成为运行时根——父 fiber
+      // 卸载不连带回收（缺 disposeOwned），jobs owner 分桶也偏离原生子代理的父子关系，
+      // 异常路径会留下孤儿 agent。宿主自己的子代理驱动同版本就是这么传的。
+      parentAgent: parent,
       meta: {
         ...(parentHeader.cwd !== undefined ? { cwd: parentHeader.cwd } : {}),
         ...(composedPreset !== undefined ? { agentPreset: composedPreset } : {}),
@@ -346,7 +351,9 @@ export async function runTranslationWorker(request: TranslationWorkerRequest): P
         `子代理等待超时（${WORKER_IDLE_TIMEOUT_MS}ms），已取消`,
       )
     }
-    const output = lastAssistantText(child.session.events)
+    // dsh 0.1.5 移除了 `session.events` 字段，改为 `snapshotEvents()`（返回冻结事件数组）；
+    // 仍旧写法会让这里读到 undefined，worker 结果被吞成「子代理运行失败」。
+    const output = lastAssistantText(child.session.snapshotEvents())
     if (flags.cancelled) {
       return { childId: childIdText, output, ok: false, error: '子代理任务被取消' }
     }

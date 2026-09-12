@@ -1,63 +1,76 @@
-# dsh-plugin-tav2 0.2.0 更新报告
+# dsh-plugin-tav2 0.2.1
 
-0.1.1 → 0.2.0，共 152 个提交。本版主线：**翻译工作台可视化、TS 原生流水线（去 Python 运行时依赖）、
-编译版游戏开箱即用、收尾门禁与世界书提名制**，并修复了一整类「模板外残留」实机事故。
+发布日期：2026-09-12
 
-## 翻译工作台（面板）
+## 兼容性（重要）
 
-- 新增 `/tav2/panel` 翻译标签页：状态带「下一步」唯一引导、任务动态卡（运行中实时活动区——
-  当前动作 / LLM 调用流 / 窗口小计）、待办原地处理（推敲审批、世界书批量确认）、
-  全场景进度列表（场景行点开单元明细，懒加载）、数据缓存 + 轮询刷新。
+| 项 | 要求 |
+| --- | --- |
+| DeepSeek Harness | **≥ 0.1.5-rc.1**（0.1.5-rc.2 实机验证；rc.1 经逐符号核对通过） |
+| Node.js | ≥ 22.19 |
+| 引擎 | Ren'Py（其他引擎待适配） |
 
-## TS 原生流水线
+dsh < 0.1.5 上服务端工具仍可用，但**设置卡会显示「Remote 通道缺失」降级提示**——
+0.1.5 起客户端才提供 Remote 设置通道（`remote.settings` / `remote.credentials`）。
+如果你在设置卡上看到与「通道」「命名空间」相关的提示，请先升级 dsh 并重启 harness。
 
-- `.rpy` 源码游戏全链路不再依赖 Python 运行时：RPA-3.0 解包/打包（pickle 编解码）、
-  rpyc 容器解析、`tl/<lang>` 模板生成、`_()/_p()` 字符串扫描、prepare 编排器；
-  `tav2_pack` 改用 TS 原生 `writeRpaArchive`。
-- `tav2_prepare` 幂等合并：重跑不覆盖已有译文，自带翻译安全摄入。
+## 本次修复
 
-## 编译版游戏（.rpa / .rpyc）
+0.1.5 把宿主的一批 API 改名/替换了，其中几处**不报错、只是行为错或界面不可用**，
+本版本把它们全部对齐（并补了离线单测钉住契约）：
 
-- prepare 重构：SDK 官方路线自动反编译，翻译模板**直接写入真实游戏目录** `game/tl/<lang>`，
-  无需切换项目；语言切换可立即进游戏验证。反编译源码参考放 `<游戏根>/tav2_src/`
-  （工作材料，不进补丁包，封包时 `clean_source=true` 可清理）。
-- 旧暂存项目数据在 `tav2_status` 读取时自动迁移，术语 / 世界书 / 审校记录不丢。
+1. **设置卡不可用（用户可见症状：「命名空间 tav2 不可用」）**
+   客户端半的调用通道已随 dsh 升级更换：`connection.api` 被移除，改为 Remote 命名空间
+   `ctx.remote.settings` / `ctx.remote.credentials`，结果信封由 `{result:{value}}` 改为
+   `{ok,value}`，且方法签名按宿主参数表严格校验实参个数。本版本迁移完毕，并把
+   「通道缺失 / 读取失败 / 命名空间未注册」三类问题分开提示（旧版把它们混成一句，
+   最误导排查）。
+2. **子代理译文被吞（静默失败）**：`session.events` 在 0.1.5 已被 `snapshotEvents()` 取代；
+   旧写法读到 `undefined`，导致分批翻译（`tav2_translate_batch`）的子代理结果被判为
+   「子代理运行失败」，**整批报失败**。
+3. **persona 段落名**：0.1.5 把部署 persona 拆成 `deployment:persona-prefix` / `-suffix`；
+   插件若沿用旧名就不再遮蔽宿主 persona，模型会同时读到两段 persona（职责/语气冲突）。
+4. **子代理运行期归属**：`agents.create` 补 `parentAgent`（不传则子代理成为运行时根，
+   父会话卸载不连带回收，异常路径会留下孤儿 agent）。
+5. **依赖版本对齐**：devDeps 精确锁到宿主实际版本（`dsh-*@0.1.5-rc.2`、`cordis@4.0.2`、
+   `schemastery@3.18.2`），并把三个运行时依赖的 dsh 包写成显式 `peerDependencies`
+   （`>=0.1.5-rc.1 <0.2.0`）——此前它们只声明为 devDeps，装机后靠宿主模块兜底解析，
+   失败时只会在运行时报 `ERR_MODULE_NOT_FOUND`。
 
-## 收尾门禁（模板外残留对账）
+## 安装 / 升级
 
-- 根因（两轮实机事故复盘）：覆盖率是对模板自身单元集算的自指指标，模板外的玩家可见文本
-  （裸角色显示名、renpy.input 提示词）漏译不会被发现。
-- `tav2_check` 增「模板外残留对账」；`tav2_pack` 打包前 fail-closed 拦截，
-  通过且有人名译名时自动生成角色名重定义补丁 `zzz_character_names.rpy` 进包。
-- 解析器加固：游戏自带 `translate` 块、`init python` 块、赋值 / old-new / 函数调用形态语句
-  不再产出伪对话单元；老项目的噪声单元在下次同步时自动清理。
-- 新增 `tav2-renpy-closure` 分册：残留机制、门禁语义与手工兜底配方。
+### 方式 A：本 Release 的预构建资产（推荐，无需自己构建）
 
-## 世界书提名制
+```powershell
+$ver = '0.2.1'
+$tgz = "https://github.com/Drhushi/dsh-plugin-tav2/releases/download/v$ver/dsh-plugin-tav2-$ver.tgz"
+pnpm -C "$env:USERPROFILE\.dsh\profiles\web" add $tgz
+```
 
-- `tav2_worldbook` 从自动出卡改为提名制：聚合证据（时序跨度 / 出现分布）按三问判据
-  （设定级实体 / 跨场景分散 / 缺背景会翻错）推荐候选；`accept=<ids>` 才出卡草案，`dismiss` 驳回。
-- 新增理解沉淀通道：从场景理解记录提取规则 / 关系类设定，作为出卡背景线索。
+> 首次安装后确认 profile 放行了原生模块构建：`pnpm.onlyBuiltDependencies` 含 `better-sqlite3`
+> （或 `pnpm-workspace.yaml` 里 `allowBuilds: better-sqlite3: true`），否则启动报 sqlite 绑定错误。
 
-## 翻译质量
+### 方式 B：从仓库安装（改代码/跟 main）
 
-- 反翻译腔禁令族 P1 默认开启（提示词注入 + 报告制后过滤）；场景级口吻判断产出 tone 文风指引。
-- 符号保真硬限制闸门（翻译符号损坏拦截）+ S17 说话人护栏；自定义翻译头 `translation.head`。
-- 翻译行格式兜底解析：模型不回 JSON 时按 unit_id 逐行救回。
+```powershell
+pnpm install && pnpm build
+powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1 `
+  -ProfileDir "$env:USERPROFILE\.dsh\profiles\web" -PluginPath "<本仓库路径>" -Apply
+```
 
-## 其他
+### 升级后必须做的一步
 
-- `tav2_migrate` 增量迁移专项（稳定 ID 对账 + 5% 阈值 fail-closed + 旧补丁归档）；
-  `tav2_verify` 运行验证、`tav2_font` 字体挑选落地、`tav2_init` 对话式初始化、
-  `tav2_deliberate_confirm` 批量锁定、审校回填可观测（skip_reasons 逐原因计数）。
-- 引擎收敛为 Ren'Py 单适配器（Unity/Yarn 识别即拒绝并明确提示）。
-- 世界书↔术语冲突判定按核心名对齐（「中文名（英文名）」标题不再误报）；status 待审批口径拆分。
-- npm 发布面收紧：包内容精确到运行时文件，不再混入工作数据与缓存。
+**彻底重启 harness**（客户端 bundle 是启动时的快照，只重开聊天/新建会话不算），
+然后**刷新页面**。否则你会继续看到旧界面——这也是旧版「改了不生效」类问题的根源。
 
-## 升级说明
+## 验证清单
 
-- 版本号从 0.1.1 直接升到 0.2.0：含面板改版与世界书 / pack 工作流行为变化。
-- `tav2_pack` 新增收尾门禁（fail-closed）：未收口会拒绝打包，按提示先锁定人名术语
-  （`tav2_deliberate_confirm`）或补齐提示词后再打包。
-- 0.1.1 用户的旧暂存项目数据（`projects/<游戏名>_prep`）无需手工处理，
-  `tav2_status` 会自动迁移到 `projects/<游戏名>/`，旧目录保留不删。
+- 设置 → 插件 → dsh-plugin-tav2：卡片能显示渠道列表与 Ren'Py SDK 路径，可保存；
+- 任意问一句：应为简体中文（插件 persona 生效）；
+- 跑一次 `tav2_status`：引擎/项目/翻译通道/运行时层字段齐全。
+
+## 资产校验
+
+Release 资产为 `npm pack` 产物（`dsh-plugin-tav2-0.2.1.tgz`），内含：
+`dist/`（含 `dist/client.js` 客户端 bundle）、`skills/tav2/`、`python/tav2/`、
+`cordis.patch.yml`、`README.md`。发布脚本会逐条校验这些必需条目与版本号后才创建 Release。

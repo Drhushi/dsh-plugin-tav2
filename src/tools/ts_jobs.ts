@@ -13,6 +13,7 @@ import { backfillReviewCsv, iterAppliedRows, readReviewCsv } from '../engine/rev
 import { runTranslate, unitContextFp } from '../engine/translate'
 import type { EngineConfig } from '../engine/config'
 import type { Document } from '../engine/models'
+import type { Generate } from '../engine/llm'
 import { loadKnowledgeInput } from './tsKnowledge'
 import {
   aggregateWorkerResults,
@@ -50,13 +51,15 @@ export type SingleTsJobOutcome = { status: 'completed' | 'failed' | 'killed'; de
 /**
  * 执行一次单批 TS 翻译（含回写/审校分支）。
  * 被 startTsTranslateJob 与子代理分批编排共用；output 由调用方统一附加。
+ * ctx 用于默认 resolveTranslationGenerate；CLI（无 ctx）经 deps.generate 注入 HTTP 直连 Generate。
  */
 export async function runSingleTsJob(
-  ctx: Context,
+  ctx: Context | undefined,
   config: Config,
   options: StartTsTranslateJobOptions,
   log: (line: string) => void,
   signal: AbortSignal,
+  deps: { generate?: Generate } = {},
 ): Promise<SingleTsJobOutcome> {
   let db: ProjectDB | null = null
   try {
@@ -76,7 +79,7 @@ export async function runSingleTsJob(
       log(`[tav2-ts] 文档加载完成：${document.scenes.length} 场景`)
     }
     db = new ProjectDB(input.dbPath)
-    const generate = await resolveTranslationGenerate(ctx, config, engineCfg, 'main-pipeline')
+    const generate = deps.generate ?? await resolveTranslationGenerate(ctx!, config, engineCfg, 'main-pipeline')
     const stats = await runTranslate(generate, db, engineCfg, document, {
       limit: options.scenes !== undefined && options.scenes.length > 0 ? undefined : options.limit,
       review: options.review,
@@ -131,7 +134,7 @@ export function startTsTranslateJob(
     kind: 'tav2' as JobKindMap['tav2'],
     label: options.label,
     outputLimitBytes: config.maxOutputChars * 3,
-    // owner 必传，见 src/core/tav2.ts startTav2Job 注释。
+    // owner 必传，见 src/tools/tav2Job.ts startTav2Job 注释。
     owner,
     run() {
       let output = ''
@@ -261,9 +264,10 @@ export interface StartTsReviewBackfillOptions {
   force?: boolean
 }
 
-/** TS 审校 CSV 回填核心（写 tl + 同步 units/TM）；后台任务与前台降级共用。 */
+/** TS 审校 CSV 回填核心（写 tl + 同步 units/TM）；后台任务与前台降级共用。
+ *  ctx 参数仅为接口兼容保留（内部不使用）；CLI 侧传 undefined 直调。 */
 export async function runTsReviewBackfill(
-  ctx: Context,
+  ctx: Context | undefined,
   config: Config,
   options: StartTsReviewBackfillOptions,
   log: (line: string) => void,

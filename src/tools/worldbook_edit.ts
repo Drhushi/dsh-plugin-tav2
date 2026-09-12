@@ -1,8 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { Config } from '../config'
-import { approvalDenialText, requestApproval } from '../core/approval'
+import { approvalDenialText, requestApproval, type ApprovalDecision } from './approval'
 import { loadEngineConfigFor, resolveProjectDbPath } from '../engine/config'
 import { ProjectDB } from '../engine/db'
 
@@ -31,7 +31,7 @@ export interface WorldbookEditArgs {
   linkedTerm?: string
 }
 
-interface WorldbookEditResult {
+export interface WorldbookEditResult {
   ok: boolean
   action: string
   affected: number
@@ -46,6 +46,104 @@ function describe(args: WorldbookEditArgs): string {
     case 'update': return `更新世界书条目 #${args.id}`
     case 'add': return `新增世界书条目：${args.title ?? ''}`
     default: return '世界书编辑'
+  }
+}
+
+/**
+ * app 层纯函数：世界书条目编辑（list 只读；confirm/update/delete/add 是写操作，需 approve 放行）。
+ * CLI 与 dsh 共用（单一事实源）；approve 注入审批决策（dsh 走 ctx.approval，CLI 走 --yes 映射）。
+ */
+export async function runTsWorldbookEdit(
+  config: Config,
+  args: WorldbookEditArgs,
+  deps: { approve: (reason: string) => Promise<ApprovalDecision> },
+): Promise<WorldbookEditResult> {
+  const engineCfg = loadEngineConfigFor(config)
+  const db = new ProjectDB(resolveProjectDbPath(engineCfg, config.engineConfigPath, config.projectDir))
+  try {
+    if (args.action === 'list') {
+      const items = db.listWorldbook(args.status ?? null)
+      const rows = items.map((e) =>
+        `${e.id} [${String(e.status ?? '')}/${String(e.kind ?? '')}] ${String(e.title ?? '')}`
+        + (e.linked_term ? ` 关联:${String(e.linked_term)}` : ''))
+      return {
+        ok: true,
+        action: 'list',
+        affected: items.length,
+        text: rows.length ? rows.join('\n') : '（无条目）',
+        items: items as unknown as Array<Record<string, JsonValue>>,
+      }
+    }
+
+    const decision = await deps.approve(describe(args))
+    if (decision !== 'allowed') {
+      return { ok: false, action: args.action, affected: 0, text: approvalDenialText(decision) }
+    }
+
+    switch (args.action) {
+      case 'confirm': {
+        const affected = db.confirmWorldbook(args.ids ?? [])
+        return { ok: true, action: 'confirm', affected, text: `已确认 ${affected} 条世界书条目。` }
+      }
+      case 'delete': {
+        const ids = args.ids ?? []
+        const linked = db.worldbookLinkedTerms(ids)
+        const affected = db.rejectWorldbook(ids)
+        let skipAffected = 0
+        if (args.skipTerm) {
+          // 方案 D：删卡并标 skip——关联术语仅锁译名、永不出卡。
+          for (const term of linked) {
+            db.setTermWorldbookStatus(term, 'skip')
+            skipAffected += 1
+          }
+        }
+        const suffix = skipAffected > 0
+          ? `，并将 ${skipAffected} 个关联术语标记 skip（仅译名、永不出卡）`
+          : ''
+        return { ok: true, action: 'delete', affected, text: `已删除 ${affected} 条世界书条目（软删）${suffix}。` }
+      }
+      case 'update': {
+        const fields: Record<string, unknown> = {}
+        if (args.title !== undefined) fields.title = args.title
+        if (args.content !== undefined) fields.content = args.content
+        if (args.keywords !== undefined) fields.keywords = args.keywords
+        if (args.sourceRefs !== undefined) fields.source_refs = args.sourceRefs
+        if (args.kind !== undefined) fields.kind = args.kind
+        if (args.linkedTerm !== undefined) fields.linked_term = args.linkedTerm
+        const ok = db.updateWorldbookEntry(args.id ?? 0, fields)
+        return {
+          ok,
+          action: 'update',
+          affected: ok ? 1 : 0,
+          text: ok ? `已更新世界书条目 #${args.id}。` : `更新失败：条目 #${args.id} 不存在或无改动。`,
+        }
+      }
+      case 'add': {
+        if (!args.title || !args.title.trim()) {
+          return { ok: false, action: 'add', affected: 0, text: 'add 必须提供 title' }
+        }
+        const id = db.addWorldbookEntry({
+          kind: args.kind ?? 'lore',
+          title: args.title,
+          content: args.content ?? '',
+          keywords: args.keywords ?? [],
+          source_refs: args.sourceRefs ?? [],
+          linked_term: args.linkedTerm ?? '',
+        })
+        return { ok: true, action: 'add', affected: 1, text: `已新增世界书条目 #${id}。` }
+      }
+      default:
+        return { ok: false, action: args.action, affected: 0, text: `未知操作：${String(args.action)}` }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      action: args.action,
+      affected: 0,
+      text: `世界书编辑失败：${String(err instanceof Error ? err.message : err)}`,
+    }
+  } finally {
+    db.close()
   }
 }
 
@@ -124,94 +222,9 @@ export function registerWorldbookEditTool(ctx: Context, config: Config): void {
       },
     },
     async execute(args: WorldbookEditArgs, exec): Promise<WorldbookEditResult> {
-      // 只编辑项目 DB，无需重新提取文档。
-      const engineCfg = loadEngineConfigFor(config)
-      const db = new ProjectDB(resolveProjectDbPath(engineCfg, config.engineConfigPath, config.projectDir))
-      try {
-        if (args.action === 'list') {
-          const items = db.listWorldbook(args.status ?? null)
-          const rows = items.map((e) =>
-            `${e.id} [${String(e.status ?? '')}/${String(e.kind ?? '')}] ${String(e.title ?? '')}`
-            + (e.linked_term ? ` 关联:${String(e.linked_term)}` : ''))
-          return {
-            ok: true,
-            action: 'list',
-            affected: items.length,
-            text: rows.length ? rows.join('\n') : '（无条目）',
-            items: items as unknown as Array<Record<string, JsonValue>>,
-          }
-        }
-
-        const decision = await requestApproval(ctx, exec, describe(args))
-        if (decision !== 'allowed') {
-          return { ok: false, action: args.action, affected: 0, text: approvalDenialText(decision) }
-        }
-
-        switch (args.action) {
-          case 'confirm': {
-            const affected = db.confirmWorldbook(args.ids ?? [])
-            return { ok: true, action: 'confirm', affected, text: `已确认 ${affected} 条世界书条目。` }
-          }
-          case 'delete': {
-            const ids = args.ids ?? []
-            const linked = db.worldbookLinkedTerms(ids)
-            const affected = db.rejectWorldbook(ids)
-            let skipAffected = 0
-            if (args.skipTerm) {
-              // 方案 D：删卡并标 skip——关联术语仅锁译名、永不出卡。
-              for (const term of linked) {
-                db.setTermWorldbookStatus(term, 'skip')
-                skipAffected += 1
-              }
-            }
-            const suffix = skipAffected > 0
-              ? `，并将 ${skipAffected} 个关联术语标记 skip（仅译名、永不出卡）`
-              : ''
-            return { ok: true, action: 'delete', affected, text: `已删除 ${affected} 条世界书条目（软删）${suffix}。` }
-          }
-          case 'update': {
-            const fields: Record<string, unknown> = {}
-            if (args.title !== undefined) fields.title = args.title
-            if (args.content !== undefined) fields.content = args.content
-            if (args.keywords !== undefined) fields.keywords = args.keywords
-            if (args.sourceRefs !== undefined) fields.source_refs = args.sourceRefs
-            if (args.kind !== undefined) fields.kind = args.kind
-            if (args.linkedTerm !== undefined) fields.linked_term = args.linkedTerm
-            const ok = db.updateWorldbookEntry(args.id ?? 0, fields)
-            return {
-              ok,
-              action: 'update',
-              affected: ok ? 1 : 0,
-              text: ok ? `已更新世界书条目 #${args.id}。` : `更新失败：条目 #${args.id} 不存在或无改动。`,
-            }
-          }
-          case 'add': {
-            if (!args.title || !args.title.trim()) {
-              return { ok: false, action: 'add', affected: 0, text: 'add 必须提供 title' }
-            }
-            const id = db.addWorldbookEntry({
-              kind: args.kind ?? 'lore',
-              title: args.title,
-              content: args.content ?? '',
-              keywords: args.keywords ?? [],
-              source_refs: args.sourceRefs ?? [],
-              linked_term: args.linkedTerm ?? '',
-            })
-            return { ok: true, action: 'add', affected: 1, text: `已新增世界书条目 #${id}。` }
-          }
-          default:
-            return { ok: false, action: args.action, affected: 0, text: `未知操作：${String(args.action)}` }
-        }
-      } catch (err) {
-        return {
-          ok: false,
-          action: args.action,
-          affected: 0,
-          text: `世界书编辑失败：${String(err instanceof Error ? err.message : err)}`,
-        }
-      } finally {
-        db.close()
-      }
+      // 薄壳：审批桥注入 app 层纯函数（CLI 若需要可复用 runTsWorldbookEdit）。
+      const approve = (reason: string) => requestApproval(ctx, exec, reason)
+      return runTsWorldbookEdit(config, args, { approve })
     },
   }))
 }

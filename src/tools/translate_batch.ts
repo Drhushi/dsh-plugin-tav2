@@ -1,12 +1,22 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
-import { resultToTool, runTav2, startTav2Job } from '../core/tav2'
+import { resultToTool, runTav2 } from '../core/tav2'
+import { startTav2Job } from './tav2Job'
 import { loadEngineConfigFor } from '../engine/config'
 import { jobMeta } from '../present/meta'
 import { startJobOrFallback, type JobDispatchResult } from './job_fallback'
 import { runSingleTsJob, startTsBatchTranslateJob } from './ts_jobs'
 import { resolveTranslationStyle, styleDenialText } from './translationStyle'
+
+/**
+ * 并行编排双实现（有意为之，非漂移）：
+ * - dsh 侧走 startTsBatchTranslateJob（宿主子代理并行，worker 数量受 subagentMaxWorkers 约束，
+ *   适配 dsh 后台任务/子代理生态）；
+ * - CLI 侧（src/cli/main.ts translate）自实现进程内 Promise 并发池 runBatchPool，
+ *   无宿主依赖、可离线测试（--workers 可调）。
+ * 两者的单窗口执行都复用 runSingleTsJob（同一 app 层事实源），仅编排不同。
+ */
 
 export interface TranslateBatchArgs {
   limit?: number

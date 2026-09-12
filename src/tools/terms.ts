@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
-import { approvalDenialText, requestApproval } from '../core/approval'
+import { approvalDenialText, requestApproval } from './approval'
 import { resultToTool, runTav2 } from '../core/tav2'
 import type { Tav2ToolResult } from '../core/types'
 import { scanLines } from '../engine/scanning'
@@ -33,9 +33,8 @@ export interface Tav2TermsResult extends Tav2ToolResult {
   }
 }
 
-/** engineBackend=ts：扫描术语候选入库。 */
-function runTsScan(ctx: Context, config: Config): Tav2TermsResult {
-  void ctx
+/** engineBackend=ts：扫描术语候选入库（CLI 侧可复用，导出）。 */
+export function runTsScan(config: Config): Tav2TermsResult {
   const knowledge = openKnowledge(config)
   try {
     const candidates = scanLines(knowledge.scanLines, knowledge.engineCfg)
@@ -51,8 +50,8 @@ function runTsScan(ctx: Context, config: Config): Tav2TermsResult {
   }
 }
 
-/** engineBackend=ts：批量锁定术语。 */
-function runTsApply(config: Config, items: TermsApplyItem[]): Tav2TermsResult {
+/** engineBackend=ts：批量锁定术语（CLI 侧复用，导出）。 */
+export function runTsApply(config: Config, items: TermsApplyItem[]): Tav2TermsResult {
   const knowledge = openKnowledge(config)
   try {
     const locked = lockTerms(knowledge.db, items.map((t) => [t.source, t.target, t.category ?? '']))
@@ -251,7 +250,7 @@ export function registerTermsTool(ctx: Context, config: Config): void {
 
       // 纯扫描（无任何动作参数）
       if (!hasWrites && !list) {
-        if (config.engineBackend !== 'python') return runTsScan(ctx, config)
+        if (config.engineBackend !== 'python') return runTsScan(config)
         const result = await runTav2({ config, args: ['terms'], signal: exec.signal })
         return resultToTool(result)
       }

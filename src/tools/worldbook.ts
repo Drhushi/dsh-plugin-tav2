@@ -3,6 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
 import { resultToTool, runTav2 } from '../core/tav2'
 import type { Tav2ToolResult } from '../core/types'
+import type { Generate } from '../engine/llm'
 import { extractCharacters } from '../engine/adapters/renpy/characters'
 import { findOccurrences, type ScanCandidate } from '../engine/scanning'
 import { coverageReport } from '../engine/worldbook'
@@ -65,12 +66,11 @@ function activeEntryCount(opened: ReturnType<typeof openKnowledge>): number {
     .filter((e) => Number(e.active ?? 1) === 1 && String(e.status) !== 'rejected').length
 }
 
-/** 接受提名：为每个提名词生成卡片草案（proposed，仍需 confirm）。 */
+/** 接受提名：为每个提名词生成卡片草案（proposed，仍需 confirm）。generate 由调用方注入（dsh=tsGenerate，CLI=HTTP 直连）。 */
 async function acceptNominations(
-  ctx: Context,
-  config: Config,
   opened: ReturnType<typeof openKnowledge>,
   ids: number[],
+  generate: Generate,
 ): Promise<{ report: string[]; constants: number; accepted: number }> {
   const { db, engineCfg, scanLines: lines } = opened
   const report: string[] = []
@@ -104,7 +104,7 @@ async function acceptNominations(
   }
   report.push(`接受 ${seeds.length} 个提名，生成卡片草案……`)
   const gen = await generateWorldbookByTerms({
-    generate: await tsGenerate(ctx, config, engineCfg),
+    generate,
     cfg: engineCfg,
     lines,
     seeds,
@@ -121,11 +121,15 @@ async function acceptNominations(
   return { report, constants: gen.constants, accepted: rows.length }
 }
 
-/** engineBackend=ts：世界书提名制主流程。 */
+/**
+ * engineBackend=ts：世界书提名制主流程。
+ * ctx 用于默认 tsGenerate；CLI（无 ctx）经 deps.generate 注入 HTTP 直连 Generate。
+ */
 export async function runTsWorldbook(
-  ctx: Context,
+  ctx: Context | undefined,
   config: Config,
   args: WorldbookArgs = {},
+  deps: { generate?: Generate } = {},
 ): Promise<Tav2WorldbookResult> {
   const knowledge = openKnowledge(config)
   try {
@@ -134,10 +138,12 @@ export async function runTsWorldbook(
       return tsKnowledgeResult('未找到可扫描的原文行。', false)
     }
     const report: string[] = []
+    // LLM 生成器：显式注入（CLI）优先，否则走 dsh ctx（宿主/专用渠道按 scope 决策）。
+    const generate = deps.generate ?? await tsGenerate(ctx!, config, engineCfg)
 
     // 写操作分支：accept 出卡 / dismiss 驳回（均只是提名记账与草案，终态仍走 edit confirm 审批）。
     if (args.accept && args.accept.length > 0) {
-      const r = await acceptNominations(ctx, config, knowledge, args.accept)
+      const r = await acceptNominations(knowledge, args.accept, generate)
       report.push(...r.report)
       return {
         ...tsKnowledgeResult(report.join('\n')),
@@ -194,7 +200,7 @@ export async function runTsWorldbook(
     const errors: string[] = []
     const understandingRows = db.allUnderstandings()
     if (engineCfg.worldbook.sediment) {
-      const sed = await sedimentNominees(await tsGenerate(ctx, config, engineCfg), engineCfg, understandingRows)
+      const sed = await sedimentNominees(generate, engineCfg, understandingRows)
       sedimented = sed.nominees
       errors.push(...sed.errors)
       report.push(`理解沉淀通道：从 ${understandingRows.length} 条场景理解中提名 ${sedimented.length} 个设定级实体。`)
@@ -202,7 +208,7 @@ export async function runTsWorldbook(
 
     // 词表通道的三问推荐（推荐而非闸门：失败时保留全部提名供人工判断）。
     if (nominees.length > 0) {
-      const rec = await recommendScanNominees(await tsGenerate(ctx, config, engineCfg), engineCfg, nominees)
+      const rec = await recommendScanNominees(generate, engineCfg, nominees)
       errors.push(...rec.errors)
     }
 

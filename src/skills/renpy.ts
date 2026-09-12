@@ -173,6 +173,25 @@ const CLOSURE_BOOKLET = `# Ren'Py 模板外残留收尾（角色名 / 输入提�
 - 提示词：跑到起名/输入环节看输入框标题。
 - 人名补丁是 translate python 块：切回原文语言自动还原英文名，属预期行为（不是没生效）。`
 
+/**
+ * 分册注册表（单一事实源）：dsh 分册注册与 CLI `tav2kit skill print --booklet <名>` 共用。
+ * key 即 --booklet 取名（也接受 renpy-<key> 形式）。
+ */
+export const RENPY_BOOKLETS: Record<string, { description: string; content: string }> = {
+  langswitch: {
+    description: "Ren'Py 设置界面语言切换接入配方：原生语言菜单 → 游戏自带切换器 → 整屏覆盖，含屏名陷阱与验证。",
+    content: LANGSWITCH_BOOKLET,
+  },
+  font: {
+    description: "Ren'Py 中文字体与样式落地配方：tav2_font 标准路径、gui 变量与自定义 style 的按语言覆盖、fail-closed 前置。",
+    content: FONT_BOOKLET,
+  },
+  closure: {
+    description: "Ren'Py 模板外残留收尾：角色显示名（translate python 重定义）与 renpy.input 提示词的机制、门禁语义与手工兜底。",
+    content: CLOSURE_BOOKLET,
+  },
+}
+
 /** 注册 Ren'Py 运行时分册（与主流程技能同批注册；内容自包含，不引用仓库 docs 路径）。 */
 export function registerRenpyBookletSkills(ctx: Context): void {
   ctx.skills.register({

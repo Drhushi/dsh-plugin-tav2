@@ -1,12 +1,24 @@
 /**
- * 翻译 persona：mode=on 时注册进 agent 作用域（agent.ctx.systemPrompt.section），
- * 以同名 `deployment:persona`（order 0）shadow 全局默认 persona。
+ * 翻译 persona：注册进 agent 作用域（agent.ctx.systemPrompt.section），
+ * 以 host 部署 persona 的**同一个段落名**（order 0）shadow 它，避免两段 persona 并存。
  * 同时注册 {{tav2_subagent_max_workers}} 变量供 persona/技能文案引用。
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Config } from './config'
 import { serviceResolvingContext } from './harness'
+
+/**
+ * 部署 persona 的段落名：dsh 0.1.5 起宿主把它拆成
+ * `deployment:persona-prefix`（order 0，模型读到的第一段）与 `deployment:persona-suffix`，
+ * rc.6 时代的单一 `deployment:persona` 已不存在——继续用旧名不会被校验拦下，
+ * 而是**不再 shadow**，于是宿主 persona 与本插件 persona 两段并存注入。
+ * 宿主导出常量（PERSONA_PREFIX_SECTION / DEPLOYMENT_PERSONA_PREFIX=0），
+ * 但插件 node_modules 里带的是 rc.6 类型副本，故这里写死并由 tests/tools.test.ts 钉住。
+ */
+const PERSONA_SECTION = 'deployment:persona-prefix'
+/** 段落排序：与宿主 DEPLOYMENT_PERSONA_PREFIX 的 order 一致（0）。 */
+const PERSONA_ORDER = 0
 
 /** 翻译协调者 persona（全套作用域，游戏工作区）。 */
 export const TRANSLATION_PERSONA = `你是游戏汉化翻译协调者，由 {{model}} 模型驱动，当前工作区是 {{cwd}}。
@@ -75,8 +87,8 @@ export const TRANSLATION_DELEGATION_CONTEXT
 export function registerTranslationPersona(agent: Agent, config: Config): void {
   const actx = serviceResolvingContext(agent.ctx)
   actx.systemPrompt.section({
-    name: 'deployment:persona',
-    order: 0,
+    name: PERSONA_SECTION,
+    order: PERSONA_ORDER,
     text: TRANSLATION_PERSONA,
   })
   const workers = Math.max(1, Math.floor(config.subagentMaxWorkers ?? 2))
@@ -87,8 +99,8 @@ export function registerTranslationPersona(agent: Agent, config: Config): void {
 export function registerTranslationAssistantPersona(agent: Agent): void {
   const actx = serviceResolvingContext(agent.ctx)
   actx.systemPrompt.section({
-    name: 'deployment:persona',
-    order: 0,
+    name: PERSONA_SECTION,
+    order: PERSONA_ORDER,
     text: TRANSLATION_ASSISTANT_PERSONA,
   })
 }
@@ -97,8 +109,8 @@ export function registerTranslationAssistantPersona(agent: Agent): void {
 export function registerTranslationWorkerPersona(agentCtx: Agent['ctx']): void {
   const actx = serviceResolvingContext(agentCtx)
   actx.systemPrompt.section({
-    name: 'deployment:persona',
-    order: 0,
+    name: PERSONA_SECTION,
+    order: PERSONA_ORDER,
     text: TRANSLATION_WORKER_PERSONA,
   })
 }

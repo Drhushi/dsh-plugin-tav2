@@ -194,6 +194,8 @@ export function runTsSelectProject(
   config: Config,
   project: string,
   sessionKey: string,
+  /** 设置卡 state.json 路径（dsh 注入；纯函数不直接依赖宿主路径，与 runTsStatus 同构）。 */
+  statePath?: string,
 ): Tav2ToolResult & { switchedTo?: string; recent?: RecentProjectInfo[]; status?: Tav2StatusSummary } {
   let target = project.trim()
   const recent = readRecentProjects(config.engineConfigPath, config.projectDir)
@@ -256,7 +258,7 @@ export function runTsSelectProject(
     updateConfigGameDirOverride(resolveConfigPath(config.engineConfigPath, config.projectDir), resolved)
   }
 
-  const status = runTsStatus(config, modeStatePath())
+  const status = runTsStatus(config, statePath)
   return {
     ...status,
     command: `select_project ${target}`,
@@ -277,7 +279,7 @@ export function runSelectProjectWithUpgrade(
   project: string,
   sessionKey: string,
 ): Tav2ToolResult & { switchedTo?: string; recent?: RecentProjectInfo[]; status?: Tav2StatusSummary } {
-  const res = runTsSelectProject(config, project, sessionKey)
+  const res = runTsSelectProject(config, project, sessionKey, modeStatePath())
   if (res.ok) {
     // 切换成功：轻量引导会话升级为全套，继续翻译工作（增量注册，重复调用幂等）。
     try {

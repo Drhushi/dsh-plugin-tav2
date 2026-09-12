@@ -1,29 +1,11 @@
-import type { Context } from '@deepseek-ai/cordis'
-import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+/**
+ * 审批契约（与 dsh 无关）：审批决策 closed union 与给模型的拒绝文案。
+ * dsh 绑定（ctx.approval 桥）在 src/tools/approval.ts——core 只定义契约，
+ * 其他宿主（CLI/MCP）按各自交互形态实现同一套决策语义。
+ */
 
 /** 审批决策（closed union，工具据此决定继续还是中止）。 */
 export type ApprovalDecision = 'allowed' | 'rejected' | 'cancelled' | 'unavailable'
-
-/**
- * 在工具执行内发起一次审批请求。
- * 必须处于打开的 turn 中（工具执行天然满足）。只有 allowed-once 是放行。
- */
-export async function requestApproval(
-  ctx: Context,
-  exec: ToolRunContext,
-  reason: string,
-): Promise<ApprovalDecision> {
-  if (!exec.agent) return 'unavailable'
-  const outcome: ApprovalOutcome = await ctx.approval.request({
-    agent: exec.agent,
-    toolName: exec.name,
-    callId: exec.callId,
-    reason,
-    signal: exec.signal,
-  })
-  return outcome === 'allowed-once' ? 'allowed' : outcome
-}
 
 /** 把审批决策渲染成给模型的失败说明。 */
 export function approvalDenialText(decision: ApprovalDecision): string {

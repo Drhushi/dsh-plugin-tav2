@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
-import { approvalDenialText, requestApproval } from '../core/approval'
+import { approvalDenialText, requestApproval, type ApprovalDecision } from './approval'
 import type { Tav2ToolResult } from '../core/types'
 import { detectEngine, renpyAdapter } from '../engine/adapters'
 import { assertSupportedEngine, loadEngineConfig, resolveProjectDbPath } from '../engine/config'
@@ -222,6 +222,51 @@ export function syncExistingTranslations(configPath: string): SyncExistingResult
   }
 }
 
+/**
+ * init 完整流程（app 层，CLI 与 dsh 共用单一事实源）：
+ * 探测/就绪 → （需写盘时）approve 放行 → 写 config.yaml → 摄入已有 tl 译文到项目 DB。
+ * wroteConfig 标记「本次实际新写 config.yaml」（dsh 会话升级用，非工具契约字段）。
+ */
+export interface InitCompleteResult extends Tav2InitResult {
+  wroteConfig: boolean
+}
+
+export async function runTsInitComplete(
+  config: Config,
+  target: string | undefined,
+  baseCwd: string | undefined,
+  deps: { approve: (reason: string) => Promise<ApprovalDecision> },
+): Promise<InitCompleteResult> {
+  const res = runTsInit(config, target, baseCwd)
+  let final: Tav2InitResult
+  let wroteConfig = false
+  if (res.needsWrite) {
+    const decision = await deps.approve(res.preview ?? '确认初始化翻译项目？')
+    if (decision !== 'allowed') {
+      return {
+        ok: false,
+        command: 'tav2_init',
+        timedOut: false,
+        text: `${approvalDenialText(decision)}：未写入 config.yaml。`,
+        wroteConfig: false,
+      }
+    }
+    const written = runTsInitWrite(res.configPath as string)
+    wroteConfig = Boolean(written.ok && res.configPath)
+    final = written
+  } else {
+    final = res
+  }
+  // 初始化后摄入已有 tl 译文状态（新写与「已就绪」重跑均执行；幂等、失败不阻塞）。
+  if (final.ok && final.configPath) {
+    const sync = syncExistingTranslations(final.configPath)
+    if (sync.imported > 0) {
+      final = { ...final, text: `${final.text}\n${sync.text}` }
+    }
+  }
+  return { ...final, wroteConfig }
+}
+
 export function registerInitTool(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'tav2_init',
@@ -257,42 +302,22 @@ export function registerInitTool(ctx: Context, config: Config): void {
       // 会话工作区（agent cwd）：相对 game_dir 按它解析，端用户说相对路径不再报「目录不存在」。
       const cwd = (exec.agent as { session?: { header?: { cwd?: string } } } | null | undefined)
         ?.session?.header?.cwd
-      const res = runTsInit(config, gameDir, cwd)
-      let final: Tav2InitResult
-      if (res.needsWrite) {
-        const decision = await requestApproval(ctx, exec, res.preview ?? '确认初始化翻译项目？')
-        if (decision !== 'allowed') {
-          return {
-            ok: false,
-            command: 'tav2_init',
-            timedOut: false,
-            text: `${approvalDenialText(decision)}：未写入 config.yaml。`,
-          }
-        }
-        const written = runTsInitWrite(res.configPath as string)
-        if (written.ok && res.configPath) {
-          // 本会话指向新生成的 config.yaml，并升级为全套翻译作用域。
-          config.projectDir = dirname(res.configPath)
-          config.engineConfigPath = ''
-          config.gameDirOverride = undefined
-          try {
-            upgradeAgentScopeToFull(exec, config)
-          } catch (err) {
-            console.warn('[dsh-plugin-tav2] tav2_init 升级作用域失败：', err)
-          }
-        }
-        final = written
-      } else {
-        final = res
-      }
-      // 初始化后摄入已有 tl 译文状态（新写与「已就绪」重跑均执行；幂等、失败不阻塞）。
-      if (final.ok && final.configPath) {
-        const sync = syncExistingTranslations(final.configPath)
-        if (sync.imported > 0) {
-          final = { ...final, text: `${final.text}\n${sync.text}` }
+      // 薄壳：审批桥注入 app 层完整流程（CLI 与 dsh 同源）。
+      const approve = (reason: string) => requestApproval(ctx, exec, reason)
+      const final = await runTsInitComplete(config, gameDir, cwd, { approve })
+      // dsh 专属宿主能力：本会话指向新生成的 config.yaml，并升级为全套翻译作用域。
+      if (final.wroteConfig) {
+        config.projectDir = dirname(final.configPath as string)
+        config.engineConfigPath = ''
+        config.gameDirOverride = undefined
+        try {
+          upgradeAgentScopeToFull(exec, config)
+        } catch (err) {
+          console.warn('[dsh-plugin-tav2] tav2_init 升级作用域失败：', err)
         }
       }
-      return final
+      const { wroteConfig: _wroteConfig, ...toolResult } = final
+      return toolResult as Tav2InitResult
     },
   }))
 }

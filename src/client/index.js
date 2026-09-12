@@ -14,6 +14,20 @@
  */
 import React from 'react'
 import { parseJobDetail } from './projection.js'
+import {
+  SCOPE_VALUES,
+  SETTINGS_UNAVAILABLE_MESSAGE,
+  cardFatalMessage,
+  cardModelOf,
+  channelRefOf,
+  invalidChannelRows,
+  namespaceRowOf,
+  readCredentialStates,
+  readSettingsDescribe,
+  remoteFacesOf,
+  writeCardSettings,
+  writeCredentialDrafts,
+} from './settingsRemote.js'
 import { WorkspacePanel } from './workspacePanel.js'
 
 const CARD_STYLE = {
@@ -282,33 +296,36 @@ const JOB_STATUS_LABEL = {
   running: '运行中', stopping: '停止中', completed: '已完成',
   failed: '失败', killed: '已终止',
 }
-/** apply 时捕获的连接 api（设置卡读/写翻译渠道、Ren'Py SDK 路径等用）。 */
-let connectionApi = null
+/** apply 时捕获的客户端插件上下文（设置卡用它按需解析 Remote 远程面）。
+ *  不在这里捕获服务实例：远程命名空间服务可能晚于本插件挂载，惰性解析才能
+ *  在缺失时给出降级文案，而不是让整块卡片静默消失。 */
+let clientCtx = null
 
 const MODE_NS = 'tav2'
 
-const SCOPE_VALUES = ['main', 'all', 'experimental']
 const SCOPE_LABELS = {
   main: 'main（仅主链路）',
   all: 'all（主链路+知识检索）',
   experimental: 'experimental（主链路+单批直跑）',
 }
-// 必须匹配 DSH 凭据引用语法（REF_PATTERN=/^[A-Za-z_][A-Za-z0-9_]*$/）：
-// 旧值 'tav2:' 含冒号非法，credentials.set 会拒绝 → 填了密钥也存不进去。
-const CHANNEL_KEY_PREFIX = 'TAV2_'
-function channelKeyRef(name) { return CHANNEL_KEY_PREFIX + name }
+// 渠道密钥存在宿主凭据域，引用名 = TAV2_<渠道名>（必须匹配宿主 REF_PATTERN
+// /^[A-Za-z_][A-Za-z0-9_]*$/）；渠道名的字符集校验见 settingsRemote.channelProblem。
 
-/** 设置 → 插件 → dsh-plugin-tav2 卡片：自动识别 + 翻译渠道（宿主 token 样式）。
- *  渠道=名称/接口地址/模型/覆盖范围 + 密钥（存宿主凭据域，ref=TAV2_<渠道名>）；当前渠道快速切换。 */
+/** 设置 → 插件 → dsh-plugin-tav2 卡片：初始化引导 + 插件依赖 + 翻译渠道。
+ *  渠道=名称/接口地址/模型/覆盖范围 + 密钥（存宿主凭据域，ref=TAV2_<渠道名>）；当前渠道快速切换。
+ *  数据通道=dsh 0.1.5 的 Remote 设置通道（ctx.remote.settings / ctx.remote.credentials），
+ *  形状适配与错误归一见 src/client/settingsRemote.js。 */
 function TranslationApiCard() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
   const [open, setOpen] = React.useState(false)
   const [available, setAvailable] = React.useState(true)
+  const [fatal, setFatal] = React.useState(null)        // 通道/命名空间不可用时的降级文案
   const [writable, setWritable] = React.useState(true)
   const [channels, setChannels] = React.useState([])   // [{name, baseUrl, model, scope}]
   const [active, setActive] = React.useState('')        // 当前渠道名；''=宿主
   const [renpySdk, setRenpySdk] = React.useState('')    // Ren'Py SDK 路径（覆盖插件 yaml 层）
+  const [revision, setRevision] = React.useState(undefined) // 读到的命名空间 revision（写时做并发检测）
   const [expanded, setExpanded] = React.useState({})    // 渠道盒子折叠状态（默认收起）
   const [base, setBase] = React.useState(null)          // 上次保存快照（判断脏）
   const [keyDrafts, setKeyDrafts] = React.useState({})  // 渠道名 -> 密钥输入
@@ -317,73 +334,44 @@ function TranslationApiCard() {
   const [saveFailed, setSaveFailed] = React.useState(false)
 
   const refresh = async () => {
-    if (connectionApi === null) {
+    const faces = remoteFacesOf(clientCtx)
+    const described = faces.settings === undefined ? undefined : await readSettingsDescribe(faces.settings)
+    const ns = described?.ok === true ? namespaceRowOf(described.value, MODE_NS) : undefined
+    // 降级文案决策收敛在 cardFatalMessage（纯函数、有单测）：三类问题分开说清
+    const fatal = cardFatalMessage(faces, described, ns)
+    if (fatal !== null) {
       setLoading(false)
       setAvailable(false)
-      setError('连接服务不可用，请重试。')
+      setFatal(fatal)
+      if (faces.settings === undefined) setWritable(false)
       return
     }
-    try {
-      const response = await connectionApi.settings.describe({})
-      const ns = (response.result?.value?.namespaces ?? []).find((item) => item.ns === MODE_NS)
-      setWritable(response.result?.value?.writable ?? true)
-      setAvailable(ns !== undefined)
-      if (!ns) {
-        setLoading(false)
-        setError(null)
-        return
-      }
-      const list = Array.isArray(ns.value?.translationChannels) ? ns.value.translationChannels : []
-      const clean = list
-        .filter((c) => c && typeof c === 'object')
-        .map((c) => ({
-          name: typeof c.name === 'string' ? c.name : '',
-          baseUrl: typeof c.baseUrl === 'string' ? c.baseUrl : '',
-          model: typeof c.model === 'string' ? c.model : '',
-          scope: SCOPE_VALUES.includes(c.scope) ? c.scope : 'main',
-        }))
-      const activeVal = typeof ns.value?.translationActiveChannel === 'string'
-        ? ns.value.translationActiveChannel : ''
-      const sdkVal = typeof ns.value?.renpySdk === 'string' ? ns.value.renpySdk : ''
-      setChannels(clean)
-      setActive(activeVal)
-      setRenpySdk(sdkVal)
-      setExpanded({})
-      setBase(JSON.stringify({ channels: clean, active: activeVal, renpySdk: sdkVal }))
-      setKeyDrafts({})
-      setConfigured({})
-      // 各渠道密钥状态：ref=TAV2_<渠道名>（与 dsh 主密钥同一套凭据域）
-      const refs = clean.map((c) => channelKeyRef(c.name))
-      try {
-        const credRes = await connectionApi.credentials.describe({ refs })
-        const creds = credRes.result?.value?.credentials ?? {}
-        const cfg = {}
-        for (const r of refs) cfg[r] = Boolean(creds[r]?.configured)
-        setConfigured(cfg)
-      } catch {
-        // 凭据服务不可用：密钥状态未知，不影响主流程
-      }
-      setLoading(false)
-      setError(null)
-    } catch (err) {
-      setLoading(false)
-      setError(`读取状态失败：${String(err instanceof Error ? err.message : err).slice(0, 200)}`)
-    }
+    setFatal(null)
+    setWritable(described.value?.writable ?? true)
+    setAvailable(true)
+    const model = cardModelOf(ns)
+    setChannels(model.channels)
+    setActive(model.active)
+    setRenpySdk(model.renpySdk)
+    setRevision(model.revision)
+    setExpanded({})
+    setBase(JSON.stringify({ channels: model.channels, active: model.active, renpySdk: model.renpySdk }))
+    setKeyDrafts({})
+    setConfigured({})
+    // 各渠道密钥状态：ref=TAV2_<渠道名>（与 dsh 主密钥同一套凭据域）
+    const creds = await readCredentialStates(faces.credentials, model.channels.map((c) => channelRefOf(c.name)))
+    if (creds.ok) setConfigured(creds.states)
+    // 凭据通道不可用时密钥状态未知，不影响主流程（保存时才会显形）
+    setLoading(false)
+    setError(null)
   }
 
   React.useEffect(() => { void refresh() }, [])
 
   const keyDirty = Object.values(keyDrafts).some((k) => typeof k === 'string' && k.trim() !== '')
   const dirty = !base || JSON.stringify({ channels, active, renpySdk }) !== base || keyDirty
-  // 校验：名称非空且不重复、接口地址必填
-  const nameSet = new Set()
-  const invalidRows = []
-  channels.forEach((c, i) => {
-    const name = (c.name || '').trim()
-    const ok = name !== '' && !nameSet.has(name) && (c.baseUrl || '').trim() !== ''
-    if (!ok) invalidRows.push(i)
-    if (name) nameSet.add(name)
-  })
+  // 校验：名称非空且不重复且字符集合法（密钥引用名 TAV2_<名> 的合法性）、接口地址必填
+  const invalidRows = invalidChannelRows(channels)
 
   const editChannel = (index, field, value) => {
     setChannels((prev) => prev.map((c, i) => (i === index ? { ...c, [field]: value } : c)))
@@ -401,9 +389,15 @@ function TranslationApiCard() {
   }
 
   const save = async () => {
-    if (connectionApi === null) return
+    const faces = remoteFacesOf(clientCtx)
+    if (faces.settings === undefined) {
+      setSaveFailed(true)
+      setError(SETTINGS_UNAVAILABLE_MESSAGE)
+      return
+    }
     if (invalidRows.length > 0) {
-      setError('请先修正渠道：名称非空且不重复、接口地址必填。')
+      const first = channels[invalidRows[0]]
+      setError(`请先修正渠道：${channelProblem(first, channels.filter((_, i) => i !== invalidRows[0]).map((c) => (c.name || '').trim())) ?? '名称非空且不重复、接口地址必填'}。`)
       return
     }
     setSaving(true)
@@ -416,16 +410,29 @@ function TranslationApiCard() {
         model: (c.model || '').trim(),
         scope: SCOPE_VALUES.includes(c.scope) ? c.scope : 'main',
       }))
-      await connectionApi.settings.update({
-        ns: MODE_NS,
-        patch: { translationChannels: clean, translationActiveChannel: active, renpySdk: (renpySdk || '').trim() },
-      })
-      // 写各渠道密钥到宿主凭据域（ref=TAV2_<渠道名>，与 dsh 主密钥同一套存储）
-      for (const c of clean) {
-        const text = (keyDrafts[c.name] || '').trim()
-        if (text) await connectionApi.credentials.set({ ref: channelKeyRef(c.name), value: text })
+      const written = await writeCardSettings(faces.settings, MODE_NS, {
+        translationChannels: clean,
+        translationActiveChannel: active,
+        renpySdk: (renpySdk || '').trim(),
+      }, revision)
+      if (!written.ok) {
+        if (written.conflict) await refresh()   // 拉到最新 revision，避免用户反复撞同一冲突
+        setSaveFailed(true)
+        setError(written.conflict
+          ? '保存失败：配置已被其他窗口修改，已重新读取最新值，请确认后重试。'
+          : `保存失败：${written.error.message}`)
+        return
       }
+      // 写各渠道密钥到宿主凭据域（ref=TAV2_<渠道名>，与 dsh 主密钥同一套存储）
+      const keys = await writeCredentialDrafts(
+        faces.credentials,
+        clean.map((c) => ({ ref: channelRefOf(c.name), value: keyDrafts[c.name] || '' })),
+      )
       await refresh()
+      if (!keys.ok) {
+        // 设置本身已保存成功，只是密钥没写进去——不在页脚标「保存失败」，直接给明细
+        setError(`设置已保存，但密钥写入失败：${keys.failures.map((f) => `${f.ref}（${f.message}）`).join('；')}`)
+      }
     } catch (err) {
       setSaveFailed(true)
       setError(`保存失败：${String(err instanceof Error ? err.message : err).slice(0, 200)}`)
@@ -438,7 +445,20 @@ function TranslationApiCard() {
 
   if (loading) return h('div', { className: 'tv2-card', style: { padding: '14px 16px' } }, '加载中…')
   if (!available) {
-    return h('div', { className: 'tv2-card', style: { padding: '14px 16px' } }, '命名空间 tav2 不可用，请重启插件后重试。')
+    return h('div', { className: 'tv2-card', style: { padding: '14px 16px' } },
+      h('p', { className: 'tv2-hint', style: { marginTop: 0 } }, fatal ?? '设置卡暂时不可用，请点「重试」。'),
+      h('button', {
+        type: 'button',
+        className: 'tv2-discard',
+        disabled: loading,
+        onClick: () => {
+          setLoading(true)
+          setAvailable(true)
+          setFatal(null)
+          void refresh()
+        },
+      }, '重试'),
+    )
   }
 
   const header = h('button', {
@@ -493,7 +513,7 @@ function TranslationApiCard() {
   // 渠道行：每个渠道一个可折叠盒子（默认收起；展开显示名称/接口地址/模型/范围 + 密钥）
   const channelRows = channels.map((c, i) => {
     const invalid = invalidRows.includes(i)
-    const ref = channelKeyRef(c.name)
+    const ref = channelRefOf(c.name)
     const isExpanded = Boolean(expanded[i])
     const boxCls = invalid ? 'tv2-channelBox tv2-channelBoxInvalid' : 'tv2-channelBox'
     return h('div', { key: i, className: boxCls },
@@ -541,7 +561,11 @@ function TranslationApiCard() {
             placeholder: configured[ref] ? '已保存（留空不改）' : '',
             onChange: (event) => setKeyDrafts((prev) => ({ ...prev, [c.name]: event.target.value })),
           })),
-        invalid ? h('p', { className: 'tv2-invalid' }, '名称非空且不重复、接口地址必填') : null,
+        invalid
+          ? h('p', { className: 'tv2-invalid' },
+            channelProblem(c, channels.filter((_, j) => j !== i).map((x) => (x.name || '').trim()))
+              ?? '名称非空且不重复、接口地址必填')
+          : null,
       ) : null,
     )
   })
@@ -605,11 +629,15 @@ function JobCard({ block, sessionId, useSessions }) {
   )
 }
 
-/** 客户端插件体：注册各 tav2_* 工具的 keyed 对话卡片。 */
-export const inject = ['slots', 'connection']
+/** 客户端插件体：注册各 tav2_* 工具的 keyed 对话卡片。
+ *
+ *  只 inject slots：设置卡的数据通道（remote.settings / remote.credentials）在卡内
+ *  惰性解析——若把它写进 inject，通道缺失时整个插件会静默不加载，用户看不到任何
+ *  提示；惰性解析则能在卡片上直接说明缺什么（可诊断性优先）。 */
+export const inject = ['slots']
 
 export function apply(ctx) {
-  connectionApi = ctx.get('connection')?.api ?? null
+  clientCtx = ctx
   const register = (key, Component) => {
     ctx.slots.inject('tool.call.toolview', () => ctx.slots.register(
       { name: 'tool.call.toolview', key },

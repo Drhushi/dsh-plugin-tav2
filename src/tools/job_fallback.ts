@@ -12,8 +12,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { JobId } from '@deepseek-ai/dsh-jobs'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import type { ApprovalDecision } from '../core/approval'
-import { approvalDenialText, requestApproval } from '../core/approval'
+import type { ApprovalDecision } from './approval'
+import { approvalDenialText, requestApproval } from './approval'
 import type { Config } from '../config'
 
 /** 判定一次 start 失败是否因"无 job controller 服务本 agent"。 */

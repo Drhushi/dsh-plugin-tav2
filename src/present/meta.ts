@@ -3,7 +3,7 @@
  * 纯函数：只读 value，不抛错（脏输入降级为空字段），键名与工具现有输出逐字一致。
  * 消费端：output.presentationMeta（随会话日志持久化，客户端经 ToolResultNode.meta 读取）。
  */
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** 窄化任意输入为可安全读取的记录对象。 */
 function record(value: unknown): Record<string, unknown> {

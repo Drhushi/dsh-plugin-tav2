@@ -1,20 +1,28 @@
 {
   "name": "dsh-plugin-tav2",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek Harness 插件：对话式游戏本地化，把 tav2（TranslateAgent v2）翻译流水线接入 dsh。引擎适配器架构，首发支持 Ren'Py。",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "tav2kit": "./dist/cli/main.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./client": "./dist/client.js",
+    "./cli": {
+      "types": "./dist/cli/main.d.ts",
+      "default": "./dist/cli/main.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "skills/tav2",
     "scripts/install-plugin.ps1",
     "scripts/postbuild.mjs",
     "scripts/build-client.mjs",
@@ -32,6 +40,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs && npm run build:client",
     "build:client": "node scripts/build-client.mjs",
+    "tav2": "node dist/cli/main.js",
+    "gen:docs": "tsx scripts/generate-agent-docs.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "ab": "tsx scripts/ab-run.ts",
@@ -51,22 +61,23 @@
   "license": "MIT",
   "dependencies": {
     "better-sqlite3": "^12.0.0",
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/schemastery": "3.18.1",
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/schemastery": "^3.18.2",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-code-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-jobs": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-code-runtime": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-invariants": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-jobs": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-scope": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-skill": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
@@ -74,6 +85,22 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-session": ">=0.1.5-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1 <0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
   },
   "dsh": {
     "bundle": {

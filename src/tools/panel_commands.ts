@@ -10,7 +10,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
-import { CallId } from '@deepseek-ai/dsh-llm'
+// 工具调用 id 的 brand：dsh 0.1.5 起叫 ToolCallId（0.1.0-rc.6 时代叫 CallId）
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 
 /** 面板命令解析出的结构化动作。 */
 export type PanelAction =
@@ -259,7 +260,7 @@ export async function handlePanelCommand(
   const mapped = panelActionToTool(parsed.action)
   try {
     const result = await ctx.tools.execute({
-      callId: CallId(`tav2-panel:${randomUUID()}`),
+      callId: ToolCallId(`tav2-panel:${randomUUID()}`),
       name: mapped.name,
       arguments: mapped.args,
       agent: invocation.agent as never,

@@ -7,13 +7,11 @@ import { registerRenpyBookletSkills } from './renpy'
  * （tav2-renpy-langswitch / tav2-renpy-font，HOW-TO 知识自包含、随 dist 交付）。
  * dsh 模型按主技能编排翻译，涉及语言切换/字体样式时按 whenToUse 命中分册。
  */
-export function registerWorkflowSkill(ctx: Context): void {
-  ctx.skills.register({
-    name: 'tav2-workflow',
-    description: '用 tav2 工具完成游戏汉化的标准流程（当前完整适配 Ren\'Py）。',
-    whenToUse: '用户要求翻译或汉化视觉小说时',
-    source: 'runtime',
-    content: `# 游戏翻译标准流程（tav2）
+/**
+ * 主流程技能内容（单一事实源）：dsh 技能注册与独立 CLI `tav2kit skill print` 共用同一份源，
+ * 避免「插件一套流程文本、CLI 另一套」的漂移。
+ */
+export const TAV2_WORKFLOW_CONTENT = `# 游戏翻译标准流程（tav2）
 
 > 定位：dsh-plugin-tav2 是引擎无关的对话式游戏汉化插件；当前完整适配 Ren'Py（非侵入补丁/字体/语言切换
 > 机制均以 Ren'Py 实现为准），其他引擎需实现对应适配器后接入。
@@ -110,7 +108,15 @@ export function registerWorkflowSkill(ctx: Context): void {
   tav2-manifest.json 与 README 路径清单，删除清单所列路径即可完全还原（可用 tav2_uninstall 按清单删除，需审批）。
 - 运行时前置条件（未用 tav2_font 挑选时用户自装的 CJK 字体）不属补丁包、不登记进 manifest；
   已用 tav2_font 挑选落地的 tl/<lang>/font/ 属补丁包产物，随 rpa 交付、可随补丁卸载还原。
-`,
+`
+
+export function registerWorkflowSkill(ctx: Context): void {
+  ctx.skills.register({
+    name: 'tav2-workflow',
+    description: '用 tav2 工具完成游戏汉化的标准流程（当前完整适配 Ren\'Py）。',
+    whenToUse: '用户要求翻译或汉化视觉小说时',
+    source: 'runtime',
+    content: TAV2_WORKFLOW_CONTENT,
   })
   registerRenpyBookletSkills(ctx)
 }

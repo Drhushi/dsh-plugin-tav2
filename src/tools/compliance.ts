@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../config'
-import { approvalDenialText, requestApproval } from '../core/approval'
+import { approvalDenialText, requestApproval } from './approval'
 import type { Tav2ToolResult } from '../core/types'
 import type { ComplianceRecord } from '../engine/db'
 import { openKnowledge, tsKnowledgeResult } from './tsKnowledge'

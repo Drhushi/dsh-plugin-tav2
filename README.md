@@ -40,20 +40,45 @@ Ren'Py 补充说明：
 
 ## 前置要求
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（Web 版，Node.js ≥ 22.19）；
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **≥ 0.1.5-rc.1**（Web 版，Node.js ≥ 22.19）。
+  0.1.5-rc.2 为实机验证版本；0.1.5-rc.1 经逐符号核对（本插件用到的 `ToolCallId`、`snapshotEvents`、
+  `dsh-persona.prefix`、Remote 设置通道均在该版本的包内）。更早的 dsh 上服务端工具仍可用，
+  但设置卡会显示「Remote 通道缺失」降级提示（0.1.5 起才有 `remote.settings` / `remote.credentials` 通道）；
 - 一个游戏（当前需为 Ren'Py 游戏，目录内含 `game/`；其他引擎支持情况见「引擎支持」）；
 - 可用的 **LLM 翻译通道**：DeepSeek API Key，或一个本地 OpenAI 兼容端点（在「设置 → 插件 → 翻译渠道」配置）。
 
-## 快速开始
+## 安装
+
+### 方式 A：从 GitHub Release 安装（推荐）
+
+每个版本在 [Releases](https://github.com/Drhushi/dsh-plugin-tav2/releases) 页有一份**预构建资产**
+（`.tgz`，已含 `dist/` 与客户端 bundle），装它不需要 clone 仓库、也不需要自己构建：
 
 ```powershell
-# 1. 安装插件（一次性；先不加 -Apply 可预览改动，确认后再真正安装）
+$ver = '0.2.1'   # 换成你要装的版本
+$tgz = "https://github.com/Drhushi/dsh-plugin-tav2/releases/download/v$ver/dsh-plugin-tav2-$ver.tgz"
+pnpm -C "$env:USERPROFILE\.dsh\profiles\web" add $tgz
+```
+
+> 首次安装（或换 profile）后，确认 profile 的 `package.json`（或 `pnpm-workspace.yaml`）放行了
+> 原生模块构建：`pnpm.onlyBuiltDependencies` 含 `better-sqlite3`，否则启动会报 sqlite 绑定错误。
+> 方式 B 的安装脚本会自动处理这一步。
+
+### 方式 B：从仓库安装（适合改代码/跟着 main 走）
+
+```powershell
+# 先在仓库里构建（link: 安装加载的是构建产物 dist，不构建会加载缺失/旧的 dist）
+pnpm install
+pnpm build
+
+# 再把插件挂进 profile（先不加 -Apply 可预览改动，确认后再真正安装）
 powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1 `
   -ProfileDir "$env:USERPROFILE\.dsh\profiles\web" `
   -PluginPath "<本仓库绝对路径>" -Apply
 ```
 
-安装完成后**重启 GUI**，设置 → 插件应出现 dsh-plugin-tav2 卡片。
+安装完成后**重启 GUI**（客户端 bundle 是 harness 启动时的快照，只重开聊天不生效），
+设置 → 插件应出现 dsh-plugin-tav2 卡片。
 
 ```
 2. 新建工作区：把工作区文件夹设为游戏根目录（含 game/）
@@ -85,7 +110,12 @@ powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1 `
 ## 常见问题
 
 - **装完启动报 sqlite 绑定错误**：profile 的 `package.json` 里 `pnpm.onlyBuiltDependencies`
-  需包含 `better-sqlite3`（安装脚本会自动处理）。
+  需包含 `better-sqlite3`（方式 B 的安装脚本会自动处理）。
+- **升级 dsh 后设置卡显示「Remote 通道缺失」**：dsh < 0.1.5 没有 Remote 设置通道；
+  升到 ≥ 0.1.5-rc.1 后**重启 harness** 即可（服务端工具不受影响）。
+- **更新插件后看不到变化**：客户端 bundle 是 harness 启动时的快照 —— 先确认 `dist/` 是新的
+  （方式 A 的资产自带 `dist/`；方式 B 要自己 `pnpm build`），再**彻底重启 harness**，
+  然后刷新页面。
 - **翻译报「LLM 调用失败」**：检查翻译通道——设置 → 插件 → 翻译渠道，
   baseUrl 与密钥配好，或确保本地端点已启动。
 - **游戏更新后**：跑 `tav2_migrate` 增量迁移，保留未变译文、只补译变化部分。

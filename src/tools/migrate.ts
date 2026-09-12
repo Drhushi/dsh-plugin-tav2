@@ -12,7 +12,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { Config } from '../config'
-import { approvalDenialText, requestApproval, type ApprovalDecision } from '../core/approval'
+import { approvalDenialText, requestApproval, type ApprovalDecision } from './approval'
 import {
   computeGameFingerprint,
   fingerprintChanged,

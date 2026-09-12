@@ -1,10 +1,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolExecutionResult, type ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { CallId } from '@deepseek-ai/dsh-llm/brand'
+// 工具调用 id 的 brand：dsh 0.1.5 起叫 ToolCallId（0.1.0-rc.6 时代叫 CallId）
+import { ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import type { Config } from '../config'
 import { resultToTool, runTav2 } from '../core/tav2'
 import type { Tav2ToolResult } from '../core/types'
 import { evaluateCandidates, type DeliberationStats, type EvidenceProvider, type SearchResult } from '../engine/deliberation'
+import type { Generate } from '../engine/llm'
 import { openKnowledge, tsGenerate, tsKnowledgeResult } from './tsKnowledge'
 import { deliberateMeta } from '../present/meta'
 
@@ -65,7 +67,7 @@ export function webSearchEvidenceFor(
     if (!ctx.tools.get('web_search')) return []
     try {
       const result = await ctx.tools.execute({
-        callId: CallId(`tav2-web-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+        callId: ToolCallId(`tav2-web-${Date.now()}-${Math.random().toString(36).slice(2)}`),
         rootCallId: exec.rootCallId,
         name: 'web_search',
         arguments: { query },
@@ -80,20 +82,27 @@ export function webSearchEvidenceFor(
   }
 }
 
-/** engineBackend=ts：直接跑 TS 术语推敲（查证经 dsh tool-web 注入）。 */
-async function runTsDeliberate(
-  ctx: Context,
+/**
+ * engineBackend=ts：直接跑 TS 术语推敲（查证经 dsh tool-web 注入）。
+ * ctx/exec 用于默认 tsGenerate 与 webSearchEvidenceFor；CLI（无 ctx）经 deps 注入
+ * HTTP 直连 Generate 与空查证（CLI 无 tool-web，靠引擎本地证据）。
+ */
+export async function runTsDeliberate(
+  ctx: Context | undefined,
   config: Config,
-  exec: ToolRunContext,
+  exec: ToolRunContext | undefined,
+  deps: { generate?: Generate; evidence?: EvidenceProvider } = {},
 ): Promise<Tav2DeliberateResult> {
   const knowledge = openKnowledge(config)
   try {
+    const generate = deps.generate ?? await tsGenerate(ctx!, config, knowledge.engineCfg)
+    const evidence = deps.evidence ?? webSearchEvidenceFor(knowledge.engineCfg.search, ctx!, exec!)
     const stats = await evaluateCandidates(
-      await tsGenerate(ctx, config, knowledge.engineCfg),
+      generate,
       knowledge.db,
       knowledge.engineCfg,
       undefined,
-      webSearchEvidenceFor(knowledge.engineCfg.search, ctx, exec),
+      evidence,
     )
     return { ...tsKnowledgeResult(JSON.stringify(stats, null, 2)), deliberation: stats }
   } catch (err) {

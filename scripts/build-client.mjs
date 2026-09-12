@@ -5,21 +5,20 @@
 // 其余依赖全部内联（本 bundle 实际只依赖 react）。
 import { build } from 'esbuild'
 
-// 与 deepseek-harness packages/client/web/src/platform.ts 的 PLATFORM_MODULES
-// 保持一致 + runtime 的 RUNTIME_STORE_EXEMPTION（本项目只用 react，其余列出
-// 以免未来引入平台模块时被错误内联）。
+// 与 dsh web 外壳的静态模块表保持一致（dsh 0.1.5：外壳启动时把该表传给
+// __ModuleLoader__.create({staticModules})，见 dsh-web-frontend 的 index-*.js 里
+// `{react:…, "react/jsx-runtime":…, …}` 那段）。本 bundle 实际只用 react；
+// 其余照抄是为了「误内联平台模块」在构建期就暴露，而不是运行期白屏。
 const PLATFORM_MODULES = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ]
 
 const PLUGIN_ID = 'dsh-plugin-tav2'
