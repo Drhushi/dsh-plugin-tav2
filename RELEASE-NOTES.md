@@ -36,6 +36,12 @@ dsh < 0.1.5 上服务端工具仍可用，但**设置卡会显示「Remote 通�
    `schemastery@3.18.2`），并把三个运行时依赖的 dsh 包写成显式 `peerDependencies`
    （`>=0.1.5-rc.1 <0.2.0`）——此前它们只声明为 devDeps，装机后靠宿主模块兜底解析，
    失败时只会在运行时报 `ERR_MODULE_NOT_FOUND`。
+6. **发布面补齐 `skills/`**：`skills/tav2/SKILL.md`（zcode skill 形态）与
+   `skills/tav2/AGENTS.md`（codex 等通用 agent 形态）此前不在发布白名单里，仓库与 Release 资产
+   都缺这两个文件，而 `package.json.files` 声明要发它们。本次连同发布链路一起修：
+   正式面 README 改由 `docs/PLUGIN-README.md` 复制（此前发布脚本会把 dev 的 tav2kit CLI 文档
+   覆盖到插件的用户文档上），并新增预构建资产 + `gh release` 联动、dist 新鲜度闸门、
+   资产条目与版本号校验。
 
 ## 安装 / 升级
 
