@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tav2",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DeepSeek Harness 插件：对话式游戏本地化，把 tav2（TranslateAgent v2）翻译流水线接入 dsh。引擎适配器架构，首发支持 Ren'Py。",
   "type": "module",
   "main": "dist/index.js",
@@ -24,6 +24,7 @@
     "dist",
     "skills/tav2",
     "scripts/install-plugin.ps1",
+    "scripts/uninstall-plugin.ps1",
     "scripts/postbuild.mjs",
     "scripts/build-client.mjs",
     "scripts/renpy_pack_rpa.py",

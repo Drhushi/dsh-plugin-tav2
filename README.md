@@ -91,6 +91,59 @@ powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1 `
 
 > 翻译是补丁式非破坏产物，只增量写目标语言目录；卸载用 `tav2_uninstall` 按清单精确删除。
 
+## 卸载
+
+插件的挂载点是 profile 的 `package.json`（`dependencies` + `dsh.profile.bundles`）。
+**在 `cordis.patch.yml` 里写 `- id: tav2 / disabled: true` 只是压住加载行**，插件仍留在 bundles 里；
+要彻底停止它对所有会话的影响，必须从 profile 摘除挂载并重启 harness。
+
+> ⚠️ 设置卡里的「翻译模式」开关**不是加载门控**：插件按工作区自动安装翻译作用域
+> （游戏工作区全套 / 普通工作区轻量引导包），关掉开关不会阻止它在新会话里生效。
+> 真正能关掉它的只有「卸载 + 重启」。
+
+用仓库自带的卸载脚本（默认 dry-run，先预览再 `-Apply`）：
+
+```powershell
+# 1. 预览将做的改动（不写任何文件）
+powershell -ExecutionPolicy Bypass -File scripts/uninstall-plugin.ps1
+
+# 2. 真正卸载，并把插件状态残留隔离到 ~/.dsh/_tav2-removed-<时间戳>/
+powershell -ExecutionPolicy Bypass -File scripts/uninstall-plugin.ps1 `
+  -ProfileDir "$env:USERPROFILE\.dsh\profiles\web" -PurgeState -Apply
+```
+
+脚本做四件事：
+
+1. `package.json`：从 `dependencies` 与 `dsh.profile.bundles` 移除 `dsh-plugin-tav2`（改前留 `.bak-uninstall-<时间戳>`）；
+2. `cordis.patch.yml`：删掉所有 `- id: tav2` 块（含 `disabled: true` 那条）及其紧邻的插件注释行，其余条目原样保留；
+3. `node_modules`：删除插件链接——junction / 符号链接只删链接本身，**不会**沿链接删进插件目录；
+4. `-PurgeState`：把插件持久状态与历史遗留**移进隔离目录**（可恢复，不硬删）：
+   `~/.dsh/dsh-plugin-tav2/`（记着你的游戏目录、翻译渠道、Ren'Py SDK 路径）、
+   `.agent-presets/tav2-translator/`、`profiles/translation.bak-*`、`cordis.patch.yml.bak-tav2-*`、
+   以及 `settings.yaml` 里的 `tav2:` 命名空间块。
+
+它**不碰 `~/.dsh/.credentials.yaml`**：里面 `TAV2_*` 密钥请自行删除，并到渠道服务商处轮换；
+脚本只列出凭据名，绝不代删。
+
+脚本**宁可报错也不假报成功**：条目识别容忍 `- id: tav2` / `- id: "tav2"` / `- id: tav2  # 注释`
+三种写法，写盘后还会复查残留（仍在就报错退出，而不是打印「已就绪」）。若 tav2 条目位于嵌套列表里
+（例如写在 `- insert:` 块内），自动删除会在父条目下留下空壳、破坏 patch 语义，脚本**拒绝改写**并
+提示手工删除这些行后重跑——此时不会写任何文件。
+
+`-PurgeState` 还会列出它**不动**的残留，供你按需处理：插件市场自己的开关记录
+（`profiles/web/.dsh-market/state.json`）、失效的 `node_modules/.bin/tav2kit*` 垫片、
+`node_modules.bak-*` 里的旧链接、以及本次卸载产生的 `.bak-uninstall-*` 备份。
+
+装的是 Release 资产（方式 A）时也可以手工等价操作：
+`pnpm -C "$env:USERPROFILE\.dsh\profiles\web" remove dsh-plugin-tav2`，再删掉 `cordis.patch.yml`
+里的 `- id: tav2` 块，然后重启。
+
+最后**彻底重启 harness**（重开会话不算——插件是在进程启动时挂载的），确认「设置 → 插件」里
+不再有卡片、`/tav2-mode` 命令消失、新会话不再出现翻译 persona 与 `tav2_*` 工具。
+
+> 游戏里的翻译补丁是另一回事：交付物按 manifest 精确清理（`tav2_uninstall`），与本节的
+> 「卸载插件」互不影响。卸载插件不会动你已交付的翻译产物。
+
 ## 常用工具
 
 | 工具 | 用途 |
@@ -121,6 +174,11 @@ powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1 `
 - **游戏更新后**：跑 `tav2_migrate` 增量迁移，保留未变译文、只补译变化部分。
 - **版权**：翻译前请确认你拥有翻译 / 发布该游戏的授权（G-1 授权记录：`tav2_compliance`）。
 - **非侵入**：插件不修改任何原游戏文件，交付物均为新增补丁，删除即还原。
+- **在设置卡里关掉「翻译模式」，新会话却仍按翻译流程走**：该开关不是加载门控（插件按工作区
+  自动分级安装，开关字段已废弃），要停止影响只能卸载插件并重启 harness，见「卸载」。
+- **装了插件后每个工作区都被当成翻译现场**：插件对普通工作区只装轻量引导包（`tav2_detect` /
+  `tav2_init` / `tav2_select_project` / `tav2_status` + 引导 persona），这也是它会影响所有新会话的原因；
+  不想要就按「卸载」摘除。
 
 ## 许可
 
