@@ -4,6 +4,27 @@
   <p>DeepSeek Harness 插件 —— 对话式游戏本地化：跟 AI 助手说说话，从侦察、术语、翻译到打包验证一站完成</p>
 </div>
 
+> [!WARNING]
+> **本项目已停止维护（2026-09-30）**。后续以独立产品 [GameTrans](https://github.com/Drhushi/GameTrans) 继续
+> （Windows 免安装版，不再依赖 DeepSeek Harness 插件形态）；本仓库只读归档，不再接受 issue 与 PR。
+>
+> **装过插件的请按下方「卸载」一节彻底移除。** 它对会话的提示词注入是运行时挂载的：
+> 在 `cordis.patch.yml` 写 `disabled: true`、或关掉设置里的开关，**都不算卸载**；
+> 普通卸载也可能留下残留，继续影响你的会话。最稳妥的完整流程：
+>
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File scripts/uninstall-plugin.ps1 `
+>   -ProfileDir "$env:USERPROFILE\.dsh\profiles\web" -PurgeState -Apply
+> ```
+>
+> 然后逐项手工确认（脚本只隔离、不代删）：
+>
+> - 彻底重启 harness（重开会话不算）后，新会话不应再出现「游戏汉化翻译协调者」persona 与 `tav2_*` 工具；
+> - `~/.dsh/.credentials.yaml` 里的 `TAV2_*` 密钥自行删除，对应的渠道 key 建议轮换；
+> - `cordis.patch.yml` 无 `- id: tav2` 块；`settings.yaml` 无 `tav2:` 命名空间块；
+> - `.agent-presets/tav2-translator/` 与 `~/.dsh/dsh-plugin-tav2/` 已随 `-PurgeState` 移入隔离目录。
+
+
 ## 这是什么
 
 一个装进 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的插件，
